@@ -12,7 +12,8 @@ from mac_messages_mcp.messages import (
     find_contact_by_name,
     check_messages_db_access,
     get_cached_contacts,
-    check_addressbook_access
+    check_addressbook_access,
+    query_messages_db
 )
 
 # Configure logging to stderr for debugging
@@ -42,6 +43,9 @@ def tool_get_recent_messages(ctx: Context, hours: int = 24, contact: str = None)
     """
     logger.info(f"Getting recent messages: hours={hours}, contact={contact}")
     try:
+        # Handle contacts that are passed as numbers
+        if contact is not None:
+            contact = str(contact)
         result = get_recent_messages(hours=hours, contact=contact)
         return result
     except Exception as e:
@@ -49,7 +53,7 @@ def tool_get_recent_messages(ctx: Context, hours: int = 24, contact: str = None)
         return f"Error getting messages: {str(e)}"
 
 @mcp.tool()
-def tool_send_message(ctx: Context, recipient: str, message: str) -> str:
+def tool_send_message(ctx: Context, recipient: str, message: str, group_chat: bool = False) -> str:
     """
     Send a message using the Messages app.
     
@@ -57,10 +61,13 @@ def tool_send_message(ctx: Context, recipient: str, message: str) -> str:
         recipient: Phone number, email, contact name, or "contact:N" to select from matches
                   For example, "contact:1" selects the first contact from a previous search
         message: Message text to send
+        group_chat: Whether to send to a group chat (uses chat ID instead of buddy)
     """
-    logger.info(f"Sending message to: {recipient}")
+    logger.info(f"Sending message to: {recipient}, group_chat: {group_chat}")
     try:
-        result = send_message(recipient=recipient, message=message)
+        # Ensure recipient is a string (handles numbers properly)
+        recipient = str(recipient)
+        result = send_message(recipient=recipient, message=message, group_chat=group_chat)
         return result
     except Exception as e:
         logger.error(f"Error in send_message: {str(e)}")
@@ -147,6 +154,37 @@ def tool_check_addressbook(ctx: Context) -> str:
     except Exception as e:
         logger.error(f"Error checking AddressBook: {str(e)}")
         return f"Error checking AddressBook: {str(e)}"
+
+@mcp.tool()
+def tool_get_chats(ctx: Context) -> str:
+    """
+    List available group chats from the Messages app.
+    """
+    logger.info("Getting available chats")
+    try:
+        query = "SELECT chat_identifier, display_name FROM chat WHERE display_name IS NOT NULL"
+        results = query_messages_db(query)
+        
+        if not results:
+            return "No group chats found."
+        
+        if "error" in results[0]:
+            return f"Error accessing chats: {results[0]['error']}"
+        
+        # Filter out chats without display names and format the results
+        chats = [r for r in results if r.get('display_name')]
+        
+        if not chats:
+            return "No named group chats found."
+        
+        formatted_chats = []
+        for i, chat in enumerate(chats, 1):
+            formatted_chats.append(f"{i}. {chat['display_name']} (ID: {chat['chat_identifier']})")
+        
+        return "Available group chats:\n" + "\n".join(formatted_chats)
+    except Exception as e:
+        logger.error(f"Error getting chats: {str(e)}")
+        return f"Error getting chats: {str(e)}"
 
 @mcp.resource("messages://recent/{hours}")
 def get_recent_messages_resource(hours: int = 24) -> str:

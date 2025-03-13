@@ -22,6 +22,48 @@ def run_applescript(script: str) -> str:
         return f"Error: {err.decode('utf-8')}"
     return out.decode('utf-8').strip()
 
+def get_chat_mapping() -> Dict[str, str]:
+    """
+    Get mapping from room_name to display_name in chat table
+    """
+    conn = sqlite3.connect(get_messages_db_path())
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT room_name, display_name FROM chat")
+    result_set = cursor.fetchall()
+
+    mapping = {room_name: display_name for room_name, display_name in result_set}
+
+    conn.close()
+
+    return mapping
+
+def extract_body_from_attributed(attributed_body):
+    """
+    Extract message content from attributedBody binary data
+    """
+    if attributed_body is None:
+        return None
+        
+    try:
+        # Try to decode attributedBody 
+        decoded = attributed_body.decode('utf-8', errors='replace')
+        
+        # Extract content using pattern matching
+        if "NSNumber" in decoded:
+            decoded = decoded.split("NSNumber")[0]
+            if "NSString" in decoded:
+                decoded = decoded.split("NSString")[1]
+                if "NSDictionary" in decoded:
+                    decoded = decoded.split("NSDictionary")[0]
+                    decoded = decoded[6:-12]
+                    return decoded
+    except Exception as e:
+        print(f"Error extracting from attributedBody: {e}")
+    
+    return None
+
+
 def get_messages_db_path() -> str:
     """Get the path to the Messages database."""
     home_dir = os.path.expanduser("~")
@@ -368,7 +410,7 @@ def find_contact_by_name(name: str) -> List[Dict[str, Any]]:
     
     return results
 
-def send_message(recipient: str, message: str) -> str:
+def send_message(recipient: str, message: str, group_chat: bool = False) -> str:
     """
     Send a message using the Messages app with improved contact resolution.
     
@@ -376,6 +418,7 @@ def send_message(recipient: str, message: str) -> str:
         recipient: Phone number, email, contact name, or special format for contact selection
                   Use "contact:N" to select the Nth contact from a previous ambiguous match
         message: Message text to send
+        group_chat: Whether this is a group chat (uses chat ID instead of buddy)
     
     Returns:
         Success or error message
@@ -398,7 +441,7 @@ def send_message(recipient: str, message: str) -> str:
             
             # Get the selected contact
             contact = send_message.recent_matches[index]
-            return _send_message_to_recipient(contact['phone'], message, contact['name'])
+            return _send_message_to_recipient(contact['phone'], message, contact['name'], group_chat)
         except (ValueError, IndexError) as e:
             return f"Error selecting contact: {str(e)}"
     
@@ -406,7 +449,7 @@ def send_message(recipient: str, message: str) -> str:
     if all(c.isdigit() or c in '+- ()' for c in recipient):
         # Clean the phone number
         clean_number = ''.join(c for c in recipient if c.isdigit())
-        return _send_message_to_recipient(clean_number, message)
+        return _send_message_to_recipient(clean_number, message, group_chat=group_chat)
     
     # Try to find the contact by name
     contacts = find_contact_by_name(recipient)
@@ -417,7 +460,7 @@ def send_message(recipient: str, message: str) -> str:
     if len(contacts) == 1:
         # Single match, use it
         contact = contacts[0]
-        return _send_message_to_recipient(contact['phone'], message, contact['name'])
+        return _send_message_to_recipient(contact['phone'], message, contact['name'], group_chat)
     else:
         # Store the matches for later selection
         send_message.recent_matches = contacts
@@ -429,63 +472,52 @@ def send_message(recipient: str, message: str) -> str:
 # Initialize the static variable for recent matches
 send_message.recent_matches = []
 
-def _send_message_to_recipient(recipient: str, message: str, contact_name: str = None) -> str:
+def _send_message_to_recipient(recipient: str, message: str, contact_name: str = None, group_chat: bool = False) -> str:
     """
-    Internal function to send a message to a specific recipient.
+    Internal function to send a message to a specific recipient using file-based approach.
     
     Args:
         recipient: Phone number or email
         message: Message text to send
         contact_name: Optional contact name for the success message
+        group_chat: Whether this is a group chat
     
     Returns:
         Success or error message
     """
-    # Clean the inputs for AppleScript
-    safe_message = message.replace('"', '\\"').replace('\\', '\\\\')
-    safe_recipient = recipient.replace('"', '\\"')
-    
-    # Use improved AppleScript with better error handling
-    script = f'''
-    tell application "Messages"
-        set targetService to 1st service whose service type = iMessage
-        
-        try
-            -- Try to get the existing buddy if possible
-            set targetBuddy to buddy "{safe_recipient}" of targetService
-            
-            -- Send the message
-            send "{safe_message}" to targetBuddy
-            
-            -- Wait briefly to check for immediate errors
-            delay 1
-            
-            -- Return success
-            return "success"
-        on error errMsg
-            -- If getting buddy fails, try to create a new conversation
-            try
-                set newMessage to send "{safe_message}" to "{safe_recipient}"
-                return "success"
-            on error errMsg2
-                -- Both methods failed
-                return "error:" & errMsg2
-            end try
-        end try
-    end tell
-    '''
-    
     try:
-        result = run_applescript(script)
-        if result.startswith("error:"):
-            return f"Error sending message: {result[6:]} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
-        elif result.strip() == "success":
-            display_name = contact_name if contact_name else recipient
-            return f"Message sent successfully to {display_name}"
+        # Create a temporary file with the message content
+        file_path = os.path.abspath('imessage_tmp.txt')
+        
+        with open(file_path, 'w') as f:
+            f.write(message)
+        
+        # Adjust the AppleScript command based on whether this is a group chat
+        if not group_chat:
+            command = f'tell application "Messages" to send (read (POSIX file "{file_path}") as «class utf8») to buddy "{recipient}"'
         else:
-            return f"Unknown result: {result} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
+            command = f'tell application "Messages" to send (read (POSIX file "{file_path}") as «class utf8») to chat "{recipient}"'
+        
+        # Run the AppleScript
+        result = run_applescript(command)
+        
+        # Clean up the temporary file
+        try:
+            os.remove(file_path)
+        except:
+            pass
+        
+        # Check result
+        if result.startswith("Error:"):
+            # Try fallback to direct method
+            return _send_message_direct(recipient, message, contact_name, group_chat)
+        
+        # Message sent successfully
+        display_name = contact_name if contact_name else recipient
+        return f"Message sent successfully to {display_name}"
     except Exception as e:
-        return f"Error sending message: {str(e)} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
+        # Try fallback method
+        return _send_message_direct(recipient, message, contact_name, group_chat)
 
 def get_contact_name(handle_id: int) -> str:
     """
@@ -548,7 +580,7 @@ def get_contact_name(handle_id: int) -> str:
 
 def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
     """
-    Get recent messages from the Messages app.
+    Get recent messages from the Messages app using attributedBody for content.
     
     Args:
         hours: Number of hours to look back (default: 24)
@@ -581,7 +613,7 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
                 # Get the selected contact's phone number
                 contact = get_recent_messages.recent_matches[index]['phone']
             except (ValueError, IndexError) as e:
-                return f"Error selecting contact: {str(e)} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
+                return f"Error selecting contact: {str(e)}"
         
         # Check if contact might be a name rather than a phone number or email
         if not all(c.isdigit() or c in '+- ()@.' for c in contact):
@@ -644,13 +676,16 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
     # to avoid integer overflow issues when binding to SQLite
     timestamp_str = str(seconds_since_apple_epoch)
     
-    # Build the SQL query - use string comparison instead of numeric
+    # Build the SQL query - use attributedBody field and text
     query = """
     SELECT 
+        m.ROWID,
         m.date, 
         m.text, 
+        m.attributedBody,
         m.is_from_me,
-        m.handle_id
+        m.handle_id,
+        m.cache_roomnames
     FROM 
         message m
     WHERE 
@@ -674,43 +709,58 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
         return "No messages found in the specified time period."
     
     if "error" in messages[0]:
-        return f"Error accessing messages: {messages[0]['error']} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
+        return f"Error accessing messages: {messages[0]['error']}"
+    
+    # Get chat mapping for group chat names
+    chat_mapping = get_chat_mapping()
     
     formatted_messages = []
     for msg in messages:
+        # Get the message content from text or attributedBody
+        if msg.get('text'):
+            body = msg['text']
+        elif msg.get('attributedBody'):
+            body = extract_body_from_attributed(msg['attributedBody'])
+            if not body:
+                # Skip messages with no content
+                continue
+        else:
+            # Skip empty messages
+            continue
+        
         # Convert Apple timestamp to readable date
         try:
-            # Apple uses Mac Absolute Time, which is the number of seconds since 2001-01-01 00:00:00 UTC.
-            # The date column could be in nanoseconds or seconds, so we need to handle both cases
-            msg_timestamp = str(msg["date"])
+            # Convert Apple timestamp to datetime
+            date_string = '2001-01-01'
+            mod_date = datetime.strptime(date_string, '%Y-%m-%d')
+            unix_timestamp = int(mod_date.timestamp()) * 1000000000
             
-            # Check if timestamp is in nanoseconds (length > 10)
-            if len(msg_timestamp) > 10:
-                # Convert nanoseconds to seconds
-                msg_timestamp_seconds = float(msg_timestamp) / 1e9
-            else:
-                # Already in seconds
-                msg_timestamp_seconds = float(msg_timestamp)
-            
-            # Mac Absolute Time starts from 2001-01-01 00:00:00 UTC
-            msg_date = apple_epoch + timedelta(seconds=msg_timestamp_seconds)
-            
-            # Convert to local timezone for display
-            local_tz = datetime.now().astimezone().tzinfo
-            msg_date = msg_date.replace(tzinfo=timezone.utc).astimezone(local_tz)
+            # Handle both nanosecond and second format timestamps
+            msg_timestamp = int(msg["date"])
+            if len(str(msg_timestamp)) > 10:  # It's in nanoseconds
+                new_date = int((msg_timestamp + unix_timestamp) / 1000000000)
+            else:  # It's already in seconds
+                new_date = mod_date.timestamp() + msg_timestamp
+                
+            date_str = datetime.fromtimestamp(new_date).strftime("%Y-%m-%d %H:%M:%S")
         except (ValueError, TypeError, OverflowError) as e:
             # If conversion fails, use a placeholder
-            msg_date = datetime.now().astimezone()
-            print(f"Timestamp conversion error: {e} for timestamp {msg['date']}")
-            
+            date_str = "Unknown date"
+            print(f"Date conversion error: {e} for timestamp {msg['date']}")
+        
         direction = "You" if msg["is_from_me"] else get_contact_name(msg["handle_id"])
         
-        # Skip empty messages
-        if not msg.get('text'):
-            continue
-            
+        # Check if this is a group chat
+        group_chat_name = None
+        if msg.get('cache_roomnames'):
+            group_chat_name = chat_mapping.get(msg['cache_roomnames'])
+        
+        message_prefix = f"[{date_str}]"
+        if group_chat_name:
+            message_prefix += f" [{group_chat_name}]"
+        
         formatted_messages.append(
-            f"[{msg_date.strftime('%Y-%m-%d %H:%M:%S %Z')}] {direction}: {msg['text']}"
+            f"{message_prefix} {direction}: {body}"
         )
     
     if not formatted_messages:
@@ -721,6 +771,77 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
 # Initialize the static variable for recent matches
 get_recent_messages.recent_matches = []
 
+def _send_message_direct(recipient: str, message: str, contact_name: str = None, group_chat: bool = False) -> str:
+    """
+    Fallback direct AppleScript method for sending messages.
+    """
+    # Clean the inputs for AppleScript
+    safe_message = message.replace('"', '\\"').replace('\\', '\\\\')
+    safe_recipient = recipient.replace('"', '\\"')
+    
+    # Different script based on group_chat flag
+    if not group_chat:
+        script = f'''
+        tell application "Messages"
+            set targetService to 1st service whose service type = iMessage
+            
+            try
+                -- Try to get the existing buddy if possible
+                set targetBuddy to buddy "{safe_recipient}" of targetService
+                
+                -- Send the message
+                send "{safe_message}" to targetBuddy
+                
+                -- Wait briefly to check for immediate errors
+                delay 1
+                
+                -- Return success
+                return "success"
+            on error errMsg
+                -- If getting buddy fails, try to create a new conversation
+                try
+                    set newMessage to send "{safe_message}" to "{safe_recipient}"
+                    return "success"
+                on error errMsg2
+                    -- Both methods failed
+                    return "error:" & errMsg2
+                end try
+            end try
+        end tell
+        '''
+    else:
+        script = f'''
+        tell application "Messages"
+            try
+                -- Try to get the existing chat
+                set targetChat to chat "{safe_recipient}"
+                
+                -- Send the message
+                send "{safe_message}" to targetChat
+                
+                -- Wait briefly to check for immediate errors
+                delay 1
+                
+                -- Return success
+                return "success"
+            on error errMsg
+                -- Chat method failed
+                return "error:" & errMsg
+            end try
+        end tell
+        '''
+    
+    try:
+        result = run_applescript(script)
+        if result.startswith("error:"):
+            return f"Error sending message: {result[6:]}"
+        elif result.strip() == "success":
+            display_name = contact_name if contact_name else recipient
+            return f"Message sent successfully to {display_name}"
+        else:
+            return f"Unknown result: {result}"
+    except Exception as e:
+        return f"Error sending message: {str(e)}"
     
 def check_messages_db_access() -> str:
     """Check if the Messages database is accessible and return detailed information."""
