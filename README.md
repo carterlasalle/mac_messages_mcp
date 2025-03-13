@@ -49,6 +49,18 @@ print(result)
 mac-messages-mcp
 ```
 
+## Development
+
+### Versioning
+
+This project uses semantic versioning. See [VERSIONING.md](VERSIONING.md) for details on how the versioning system works and how to release new versions.
+
+To bump the version:
+
+```bash
+python scripts/bump_version.py [patch|minor|major]
+```
+
 ## Security Notes
 
 This application accesses the Messages database directly, which contains personal communications. Please use it responsibly and ensure you have appropriate permissions.

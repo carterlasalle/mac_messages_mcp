@@ -1,22 +1,47 @@
 name: Publish Python Package
 
 on:
-  release:
-    types: [created]
+  push:
+    tags:
+      - 'v*'  # Only run when pushing tags that start with 'v'
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
+      with:
+        fetch-depth: 0  # Fetch all history for tag discovery
+    
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.10'
+    
+    - name: Extract version from tag
+      id: get_version
+      run: |
+        # Strip the 'v' prefix from the tag name
+        VERSION=${GITHUB_REF#refs/tags/v}
+        echo "VERSION=$VERSION" >> $GITHUB_ENV
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+    
+    - name: Update version in files
+      run: |
+        # Update version in __init__.py
+        sed -i "s/__version__ = \".*\"/__version__ = \"$VERSION\"/" mac_messages_mcp/__init__.py
+        
+        # Update version in pyproject.toml
+        sed -i "s/version = \".*\"/version = \"$VERSION\"/" pyproject.toml
+        
+        # Show the changes
+        git diff
+    
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install uv
+        pip install build twine
+    
     - name: Build and publish
       env:
         UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
