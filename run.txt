@@ -1,5 +1,0 @@
-npx @modelcontextprotocol/inspector \
-  uv \
-  --directory /Users/rocket/mac_messages_mcp \
-  run \
-  mac-messages-mcp
