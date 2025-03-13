@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mac-messages-mcp"
+version = "0.1.0"
+description = "A bridge for interacting with macOS Messages app through MCP"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Carter Lasalle", email = "carterlasalle@gmail.com"}
+]
+keywords = ["macos", "messages", "imessage", "mcp"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Operating System :: MacOS :: MacOS X",
+    "Topic :: Communications :: Chat",
+]
+dependencies = [
+    "mcp[cli]", # For FastMCP functionality with CLI support
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "black>=23.0.0",
+    "isort>=5.10.0",
+    "mypy>=1.0.0",
+]
+
+[project.scripts]
+mac-messages-mcp = "mac_messages_mcp.server:run_server"
+
+[tool.setuptools]
+packages = ["mac_messages_mcp"]
+
+[tool.black]
+line-length = 88
+target-version = ["py310"]
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true 
