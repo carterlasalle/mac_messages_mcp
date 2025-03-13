@@ -1,18 +1,37 @@
+#!/usr/bin/env python3
 """
-MCP server implementation for Mac Messages with improved contact handling
+Mac Messages MCP - Entry point fixed for proper MCP protocol implementation
 """
-import json
-from typing import Optional, List, Dict, Any
-
+import sys
+import logging
+import asyncio
 from mcp.server.fastmcp import FastMCP, Context
+from mac_messages_mcp.messages import (
+    get_recent_messages,
+    send_message,
+    find_contact_by_name,
+    check_messages_db_access,
+    get_cached_contacts,
+    check_addressbook_access
+)
 
-from .messages import get_recent_messages, send_message, find_contact_by_name
+# Configure logging to stderr for debugging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    stream=sys.stderr
+)
 
-# Initialize the MCP server
-mcp = FastMCP("MessageBridge")
+logger = logging.getLogger("mac_messages_mcp")
+
+# Initialize the MCP server with proper description
+mcp = FastMCP(
+    "MessageBridge", 
+    description="A bridge for interacting with macOS Messages app"
+)
 
 @mcp.tool()
-def tool_get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
+def tool_get_recent_messages(ctx: Context, hours: int = 24, contact: str = None) -> str:
     """
     Get recent messages from the Messages app.
     
@@ -20,18 +39,17 @@ def tool_get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> 
         hours: Number of hours to look back (default: 24)
         contact: Filter by contact name, phone number, or email (optional)
                 Use "contact:N" to select a specific contact from previous matches
-    
-    Returns:
-        Formatted string with recent messages
     """
-    # Convert contact to string if provided (handles numeric phone numbers)
-    if contact is not None:
-        contact = str(contact)
-    
-    return get_recent_messages(hours=hours, contact=contact)
+    logger.info(f"Getting recent messages: hours={hours}, contact={contact}")
+    try:
+        result = get_recent_messages(hours=hours, contact=contact)
+        return result
+    except Exception as e:
+        logger.error(f"Error in get_recent_messages: {str(e)}")
+        return f"Error getting messages: {str(e)}"
 
 @mcp.tool()
-def tool_send_message(recipient: str, message: str) -> str:
+def tool_send_message(ctx: Context, recipient: str, message: str) -> str:
     """
     Send a message using the Messages app.
     
@@ -39,43 +57,96 @@ def tool_send_message(recipient: str, message: str) -> str:
         recipient: Phone number, email, contact name, or "contact:N" to select from matches
                   For example, "contact:1" selects the first contact from a previous search
         message: Message text to send
-    
-    Returns:
-        Success or error message
     """
-    # Ensure recipient is a string (handles numbers properly)
-    recipient = str(recipient)
-    return send_message(recipient=recipient, message=message)
+    logger.info(f"Sending message to: {recipient}")
+    try:
+        result = send_message(recipient=recipient, message=message)
+        return result
+    except Exception as e:
+        logger.error(f"Error in send_message: {str(e)}")
+        return f"Error sending message: {str(e)}"
 
 @mcp.tool()
-def tool_find_contact(name: str) -> str:
+def tool_find_contact(ctx: Context, name: str) -> str:
     """
     Find a contact by name using fuzzy matching.
     
     Args:
         name: The name to search for
-    
-    Returns:
-        Information about matching contacts
     """
-    matches = find_contact_by_name(name)
-    
-    if not matches:
-        return f"No contacts found matching '{name}'."
-    
-    if len(matches) == 1:
-        contact = matches[0]
-        return f"Found contact: {contact['name']} ({contact['phone']}) with confidence {contact['score']:.2f}"
-    else:
-        # Format multiple matches
-        result = [f"Found {len(matches)} contacts matching '{name}':"]
-        for i, contact in enumerate(matches[:10]):  # Limit to top 10
-            result.append(f"{i+1}. {contact['name']} ({contact['phone']}) - confidence {contact['score']:.2f}")
+    logger.info(f"Finding contact: {name}")
+    try:
+        matches = find_contact_by_name(name)
         
-        if len(matches) > 10:
-            result.append(f"...and {len(matches) - 10} more.")
+        if not matches:
+            return f"No contacts found matching '{name}'."
+        
+        if len(matches) == 1:
+            contact = matches[0]
+            return f"Found contact: {contact['name']} ({contact['phone']}) with confidence {contact['score']:.2f}"
+        else:
+            # Format multiple matches
+            result = [f"Found {len(matches)} contacts matching '{name}':"]
+            for i, contact in enumerate(matches[:10]):  # Limit to top 10
+                result.append(f"{i+1}. {contact['name']} ({contact['phone']}) - confidence {contact['score']:.2f}")
+            
+            if len(matches) > 10:
+                result.append(f"...and {len(matches) - 10} more.")
+            
+            return "\n".join(result)
+    except Exception as e:
+        logger.error(f"Error in find_contact: {str(e)}")
+        return f"Error finding contact: {str(e)}"
+
+@mcp.tool()
+def tool_check_db_access(ctx: Context) -> str:
+    """
+    Diagnose database access issues.
+    """
+    logger.info("Checking database access")
+    try:
+        return check_messages_db_access()
+    except Exception as e:
+        logger.error(f"Error checking database access: {str(e)}")
+        return f"Error checking database access: {str(e)}"
+
+@mcp.tool()
+def tool_check_contacts(ctx: Context) -> str:
+    """
+    List available contacts in the address book.
+    """
+    logger.info("Checking available contacts")
+    try:
+        contacts = get_cached_contacts()
+        if not contacts:
+            return "No contacts found in AddressBook."
+        
+        contact_count = len(contacts)
+        sample_entries = list(contacts.items())[:10]  # Show first 10 contacts
+        formatted_samples = [f"{number} -> {name}" for number, name in sample_entries]
+        
+        result = [
+            f"Found {contact_count} contacts in AddressBook.",
+            "Sample entries (first 10):",
+            *formatted_samples
+        ]
         
         return "\n".join(result)
+    except Exception as e:
+        logger.error(f"Error checking contacts: {str(e)}")
+        return f"Error checking contacts: {str(e)}"
+
+@mcp.tool()
+def tool_check_addressbook(ctx: Context) -> str:
+    """
+    Diagnose AddressBook access issues.
+    """
+    logger.info("Checking AddressBook access")
+    try:
+        return check_addressbook_access()
+    except Exception as e:
+        logger.error(f"Error checking AddressBook: {str(e)}")
+        return f"Error checking AddressBook: {str(e)}"
 
 @mcp.resource("messages://recent/{hours}")
 def get_recent_messages_resource(hours: int = 24) -> str:
@@ -87,57 +158,14 @@ def get_contact_messages_resource(contact: str, hours: int = 24) -> str:
     """Resource that provides messages from a specific contact."""
     return get_recent_messages(hours=hours, contact=contact)
 
-@mcp.tool()
-def tool_check_db_access() -> str:
-    """
-    Diagnose database access issues.
-    
-    Returns:
-        Detailed information about database access status
-    """
-    from .messages import check_messages_db_access
-    return check_messages_db_access()
-
-@mcp.tool()
-def tool_check_contacts() -> str:
-    """
-    List available contacts in the address book.
-    
-    Returns:
-        Information about the available contacts
-    """
-    from .messages import get_cached_contacts
-    
-    contacts = get_cached_contacts()
-    if not contacts:
-        return "No contacts found in AddressBook."
-    
-    contact_count = len(contacts)
-    sample_entries = list(contacts.items())[:10]  # Show first 10 contacts
-    formatted_samples = [f"{number} -> {name}" for number, name in sample_entries]
-    
-    result = [
-        f"Found {contact_count} contacts in AddressBook.",
-        "Sample entries (first 10):",
-        *formatted_samples
-    ]
-    
-    return "\n".join(result)
-
-@mcp.tool()
-def tool_check_addressbook() -> str:
-    """
-    Diagnose AddressBook access issues.
-    
-    Returns:
-        Detailed information about AddressBook access status
-    """
-    from .messages import check_addressbook_access
-    return check_addressbook_access()
-
 def run_server():
-    """Run the MCP server"""
-    mcp.run()
+    """Run the MCP server with proper error handling"""
+    try:
+        logger.info("Starting Mac Messages MCP server...")
+        mcp.run()
+    except Exception as e:
+        logger.error(f"Failed to start server: {str(e)}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     run_server()
