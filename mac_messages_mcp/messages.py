@@ -4,8 +4,104 @@ Core functionality for interacting with macOS Messages app
 import os
 import sqlite3
 import subprocess
+import json
+import time
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
+
+def normalize_phone_number(phone: str) -> str:
+    """
+    Normalize a phone number by removing all non-digit characters.
+    """
+    if not phone:
+        return ""
+    return ''.join(c for c in phone if c.isdigit())
+
+# Global cache for contacts map
+_CONTACTS_CACHE = None
+_LAST_CACHE_UPDATE = 0
+_CACHE_TTL = 300  # 5 minutes in seconds
+
+def get_addressbook_contacts() -> Dict[str, str]:
+    """
+    Query the macOS AddressBook database to get contacts and their phone numbers.
+    Returns a dictionary mapping normalized phone numbers to contact names.
+    """
+    contacts_map = {}
+    
+    try:
+        # Form the SQL query to execute via command line
+        cmd = """
+        sqlite3 ~/Library/"Application Support"/AddressBook/Sources/*/AddressBook-v22.abcddb<<EOF
+        .mode json
+        SELECT DISTINCT
+            ZABCDRECORD.ZFIRSTNAME [FIRST NAME],
+            ZABCDRECORD.ZLASTNAME [LAST NAME],
+            ZABCDPHONENUMBER.ZFULLNUMBER [FULL NUMBER]
+        FROM
+            ZABCDRECORD
+            LEFT JOIN ZABCDPHONENUMBER ON ZABCDRECORD.Z_PK = ZABCDPHONENUMBER.ZOWNER
+        ORDER BY
+            ZABCDRECORD.ZLASTNAME,
+            ZABCDRECORD.ZFIRSTNAME,
+            ZABCDPHONENUMBER.ZORDERINGINDEX ASC;
+        EOF
+        """
+        
+        # Execute the command
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            # Parse the JSON output line by line (it's a series of JSON objects)
+            for line in result.stdout.strip().split('\n'):
+                if not line.strip():
+                    continue
+                
+                # Remove trailing commas that might cause JSON parsing errors
+                line = line.rstrip(',')
+                
+                try:
+                    contact = json.loads(line)
+                    first_name = contact.get("FIRST NAME", "")
+                    last_name = contact.get("LAST NAME", "")
+                    phone = contact.get("FULL NUMBER", "")
+                    
+                    # Skip entries without phone numbers
+                    if not phone:
+                        continue
+                    
+                    # Clean up phone number and remove any image metadata
+                    if "X-IMAGETYPE" in phone:
+                        phone = phone.split("X-IMAGETYPE")[0]
+                    
+                    # Create full name
+                    full_name = " ".join(filter(None, [first_name, last_name]))
+                    if not full_name.strip():
+                        continue
+                    
+                    # Normalize phone number and add to map
+                    normalized_phone = normalize_phone_number(phone)
+                    if normalized_phone:
+                        contacts_map[normalized_phone] = full_name
+                except json.JSONDecodeError:
+                    # Skip individual lines that fail to parse
+                    continue
+    
+    except Exception as e:
+        print(f"Error getting AddressBook contacts: {str(e)}")
+    
+    return contacts_map
+
+def get_cached_contacts() -> Dict[str, str]:
+    """Get cached contacts map or refresh if needed"""
+    global _CONTACTS_CACHE, _LAST_CACHE_UPDATE
+    
+    current_time = time.time()
+    if _CONTACTS_CACHE is None or (current_time - _LAST_CACHE_UPDATE) > _CACHE_TTL:
+        _CONTACTS_CACHE = get_addressbook_contacts()
+        _LAST_CACHE_UPDATE = current_time
+    
+    return _CONTACTS_CACHE
 
 def run_applescript(script: str) -> str:
     """Run an AppleScript and return the result."""
@@ -26,7 +122,17 @@ def query_messages_db(query: str, params: tuple = ()) -> List[Dict[str, Any]]:
     """Query the Messages database and return results as a list of dictionaries."""
     try:
         db_path = get_messages_db_path()
-        conn = sqlite3.connect(db_path)
+        
+        # Check if the database file exists and is accessible
+        if not os.path.exists(db_path):
+            return [{"error": f"Messages database not found at {db_path}"}]
+            
+        # Try to connect to the database
+        try:
+            conn = sqlite3.connect(db_path)
+        except sqlite3.OperationalError as e:
+            return [{"error": f"Cannot access Messages database. Please grant Full Disk Access permission to your terminal application in System Preferences > Security & Privacy > Privacy > Full Disk Access. Error: {str(e)}"}]
+            
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute(query, params)
@@ -37,14 +143,63 @@ def query_messages_db(query: str, params: tuple = ()) -> List[Dict[str, Any]]:
         return [{"error": str(e)}]
 
 def get_contact_name(handle_id: int) -> str:
-    """Get contact name from handle_id."""
-    query = """
+    """
+    Get contact name from handle_id with improved contact lookup.
+    """
+    if handle_id is None:
+        return "Unknown"
+        
+    # First, get the phone number or email
+    handle_query = """
     SELECT id FROM handle WHERE ROWID = ?
     """
-    results = query_messages_db(query, (handle_id,))
-    if results and "id" in results[0]:
-        return results[0]["id"]
-    return "Unknown"
+    handles = query_messages_db(handle_query, (handle_id,))
+    
+    if not handles or "error" in handles[0]:
+        return "Unknown"
+    
+    handle_id_value = handles[0]["id"]
+    
+    # Try to match with AddressBook contacts
+    contacts = get_cached_contacts()
+    normalized_handle = normalize_phone_number(handle_id_value)
+    
+    # Try different variations of the number for matching
+    if normalized_handle in contacts:
+        return contacts[normalized_handle]
+    
+    # Sometimes numbers in the addressbook have the country code, but messages don't
+    if normalized_handle.startswith('1') and len(normalized_handle) > 10:
+        # Try without country code
+        if normalized_handle[1:] in contacts:
+            return contacts[normalized_handle[1:]]
+    elif len(normalized_handle) == 10:  # US number without country code
+        # Try with country code
+        if '1' + normalized_handle in contacts:
+            return contacts['1' + normalized_handle]
+    
+    # If no match found in AddressBook, fall back to display name from chat
+    contact_query = """
+    SELECT 
+        c.display_name 
+    FROM 
+        handle h
+    JOIN 
+        chat_handle_join chj ON h.ROWID = chj.handle_id
+    JOIN 
+        chat c ON chj.chat_id = c.ROWID
+    WHERE 
+        h.id = ? 
+    LIMIT 1
+    """
+    
+    contacts = query_messages_db(contact_query, (handle_id_value,))
+    
+    if contacts and len(contacts) > 0 and "display_name" in contacts[0] and contacts[0]["display_name"]:
+        return contacts[0]["display_name"]
+    
+    # If no contact name found, return the phone number or email
+    return handle_id_value
 
 def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
     """
@@ -65,7 +220,11 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
     apple_epoch = datetime(2001, 1, 1)
     seconds_since_apple_epoch = int((hours_ago - apple_epoch).total_seconds())
     
-    # Build the SQL query
+    # Make sure we're using a string representation for the timestamp
+    # to avoid integer overflow issues when binding to SQLite
+    timestamp_str = str(seconds_since_apple_epoch)
+    
+    # Build the SQL query - use string comparison instead of numeric
     query = """
     SELECT 
         m.date, 
@@ -75,15 +234,15 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
     FROM 
         message m
     WHERE 
-        m.date > ? 
+        CAST(m.date AS TEXT) > ? 
     """
     
-    params = (seconds_since_apple_epoch,)
+    params = (timestamp_str,)
     
     # Add contact filter if provided
     if contact:
         query += "AND m.handle_id IN (SELECT ROWID FROM handle WHERE id = ?) "
-        params = (seconds_since_apple_epoch, contact)
+        params = (timestamp_str, contact)
     
     query += "ORDER BY m.date DESC LIMIT 100"
     
@@ -99,8 +258,15 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
     
     formatted_messages = []
     for msg in messages:
-        # Convert Apple timestamp to readable date
-        msg_date = apple_epoch + timedelta(seconds=msg["date"])
+        # Convert Apple timestamp to readable date - handle as string first
+        try:
+            # First convert to integer safely
+            msg_date_int = int(str(msg["date"]))
+            msg_date = apple_epoch + timedelta(seconds=msg_date_int)
+        except (ValueError, TypeError, OverflowError):
+            # If conversion fails, use a placeholder
+            msg_date = datetime.now()
+            
         direction = "You" if msg["is_from_me"] else get_contact_name(msg["handle_id"])
         
         formatted_messages.append(
@@ -140,3 +306,53 @@ def send_message(recipient: str, message: str) -> str:
         return f"Message sent successfully to {recipient}"
     except Exception as e:
         return f"Error sending message: {str(e)}" 
+    
+def check_messages_db_access() -> str:
+    """Check if the Messages database is accessible and return detailed information."""
+    try:
+        db_path = get_messages_db_path()
+        status = []
+        
+        # Check if the file exists
+        if not os.path.exists(db_path):
+            return f"ERROR: Messages database not found at {db_path}"
+        
+        status.append(f"Database file exists at: {db_path}")
+        
+        # Check file permissions
+        try:
+            with open(db_path, 'rb') as f:
+                # Just try to read a byte to confirm access
+                f.read(1)
+            status.append("File is readable")
+        except PermissionError:
+            return f"ERROR: Permission denied when trying to read {db_path}. Please grant Full Disk Access permission to your terminal application."
+        except Exception as e:
+            return f"ERROR: Unknown error reading file: {str(e)}"
+        
+        # Try to connect to the database
+        try:
+            conn = sqlite3.connect(db_path)
+            status.append("Successfully connected to database")
+            
+            # Test a simple query
+            cursor = conn.cursor()
+            cursor.execute("SELECT count(*) FROM sqlite_master")
+            count = cursor.fetchone()[0]
+            status.append(f"Database contains {count} tables")
+            
+            # Check if the necessary tables exist
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('message', 'handle', 'chat')")
+            tables = [row[0] for row in cursor.fetchall()]
+            if 'message' in tables and 'handle' in tables:
+                status.append("Required tables (message, handle) are present")
+            else:
+                status.append(f"WARNING: Some required tables are missing. Found: {', '.join(tables)}")
+            
+            conn.close()
+        except sqlite3.OperationalError as e:
+            return f"ERROR: Database connection error: {str(e)}"
+        
+        return "\n".join(status)
+    except Exception as e:
+        return f"ERROR: Unexpected error during database access check: {str(e)}"

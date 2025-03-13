@@ -49,6 +49,42 @@ def get_contact_messages_resource(contact: str, hours: int = 24) -> str:
     """Resource that provides messages from a specific contact."""
     return get_recent_messages(hours=hours, contact=contact)
 
+@mcp.tool()
+def tool_check_db_access() -> str:
+    """
+    Diagnose database access issues.
+    
+    Returns:
+        Detailed information about database access status
+    """
+    from .messages import check_messages_db_access
+    return check_messages_db_access()
+@mcp.tool()
+def tool_check_contacts() -> str:
+    """
+    List available contacts in the address book.
+    
+    Returns:
+        Information about the available contacts
+    """
+    from .messages import get_cached_contacts
+    
+    contacts = get_cached_contacts()
+    if not contacts:
+        return "No contacts found in AddressBook."
+    
+    contact_count = len(contacts)
+    sample_entries = list(contacts.items())[:10]  # Show first 10 contacts
+    formatted_samples = [f"{number} -> {name}" for number, name in sample_entries]
+    
+    result = [
+        f"Found {contact_count} contacts in AddressBook.",
+        "Sample entries (first 10):",
+        *formatted_samples
+    ]
+    
+    return "\n".join(result)
+
 def run_server():
     """Run the MCP server"""
     mcp.run()
