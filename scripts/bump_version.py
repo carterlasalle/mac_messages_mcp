@@ -6,7 +6,7 @@ Usage:
     python scripts/bump_version.py [major|minor|patch]
     python scripts/bump_version.py --help
     
-Default is patch if no argument is provided.
+Default is patch if no argument is provided.]
 """
 
 import os
