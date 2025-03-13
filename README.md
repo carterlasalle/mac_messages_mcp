@@ -9,22 +9,84 @@ A Python bridge for interacting with the macOS Messages app using MCP (Multiple 
 - Send new messages through iMessage
 - Access messages via an API
 
-## Requirements
+## Prerequisites
 
 - macOS (tested on macOS 11+)
 - Python 3.10+
-- Access to the Messages app and its database
+- **uv package manager**
+
+### Installing uv
+
+If you're on Mac, install uv using Homebrew:
+
+```bash
+brew install uv
+```
+
+Otherwise, follow the installation instructions on the [uv website](https://github.com/astral-sh/uv).
+
+⚠️ **Do not proceed before installing uv**
 
 ## Installation
 
+### Full Disk Access Permission
+
+⚠️ This application requires **Full Disk Access** permission for your terminal or application to access the Messages database. 
+
+To grant Full Disk Access:
+1. Open **System Preferences/Settings** > **Security & Privacy/Privacy** > **Full Disk Access**
+2. Click the lock icon to make changes
+3. Add your terminal app (Terminal, iTerm2, etc.) or Claude Desktop/Cursor to the list
+4. Restart your terminal or application after granting permission
+
+## Integration
+
+### Claude Desktop Integration
+
+1. Go to **Claude** > **Settings** > **Developer** > **Edit Config** > **claude_desktop_config.json**
+2. Add the following configuration:
+
+```json
+{
+    "mcpServers": {
+        "messages": {
+            "command": "uvx",
+            "args": [
+                "mac-messages-mcp"
+            ]
+        }
+    }
+}
+```
+
+### Cursor Integration
+
+Go to **Cursor Settings** > **MCP** and paste this as a command:
+
+```
+uvx mac-messages-mcp
+```
+
+⚠️ Only run one instance of the MCP server (either on Cursor or Claude Desktop), not both
+
+
+### Option 1: Install from PyPI
+
+```bash
+uv pip install mac-messages-mcp
+```
+
+### Option 2: Install from source
+
 ```bash
 # Clone the repository
-git clone https://github.com/carterlasalle/mac-messages-mcp.git
-cd mac-messages-mcp
+git clone https://github.com/carterlasalle/mac_messages_mcp.git
+cd mac_messages_mcp
 
 # Install dependencies
-pip install -e .
+uv install -e .
 ```
+
 
 ## Usage
 
@@ -45,7 +107,7 @@ print(result)
 ### As a Command-Line Tool
 
 ```bash
-# Run the MCP server
+# Run the MCP server directly
 mac-messages-mcp
 ```
 
