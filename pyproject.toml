@@ -27,9 +27,9 @@ dependencies = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/carterlasalle/mac-messages-mcp"
-"Bug Tracker" = "https://github.com/carterlasalle/mac-messages-mcp/issues"
-"Source" = "https://github.com/carterlasalle/mac-messages-mcp"
+"Homepage" = "https://github.com/carterlasalle/mac_messages_mcp"
+"Bug Tracker" = "https://github.com/carterlasalle/mac_messages_mcp/issues"
+"Source" = "https://github.com/carterlasalle/mac_messages_mcp"
 
 [project.optional-dependencies]
 dev = [
