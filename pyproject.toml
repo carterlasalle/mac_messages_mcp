@@ -27,6 +27,10 @@ dependencies = [
     "mcp[cli]", # For FastMCP functionality with CLI support
 ]
 
+[project.urls]
+"Homepage" = "https://github.com/carterlasalle/mac-messages-mcp"
+"Bug Tracker" = "https://github.com/carterlasalle/mac-messages-mcp/issues"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",

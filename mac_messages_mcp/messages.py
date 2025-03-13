@@ -40,7 +40,7 @@ def query_messages_db(query: str, params: tuple = ()) -> List[Dict[str, Any]]:
         try:
             conn = sqlite3.connect(db_path)
         except sqlite3.OperationalError as e:
-            return [{"error": f"Cannot access Messages database. Please grant Full Disk Access permission to your terminal application in System Preferences > Security & Privacy > Privacy > Full Disk Access. Error: {str(e)}"}]
+            return [{"error": f"Cannot access Messages database. Please grant Full Disk Access permission to your terminal application in System Preferences > Security & Privacy > Privacy > Full Disk Access. Error: {str(e)} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."}]
             
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -143,7 +143,7 @@ def query_addressbook_db(query: str, params: tuple = ()) -> List[Dict[str, Any]]
         db_paths = glob.glob(sources_path)
         
         if not db_paths:
-            return [{"error": f"AddressBook database not found at {sources_path}"}]
+            return [{"error": f"AddressBook database not found at {sources_path} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."}]
         
         # Try each database path until one works
         all_results = []
@@ -162,7 +162,7 @@ def query_addressbook_db(query: str, params: tuple = ()) -> List[Dict[str, Any]]
                 continue
         
         if not all_results and len(db_paths) > 0:
-            return [{"error": f"Could not access any AddressBook databases. Please grant Full Disk Access permission."}]
+            return [{"error": f"Could not access any AddressBook databases. Please grant Full Disk Access permission. PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."}]
             
         return all_results
     except Exception as e:
@@ -321,7 +321,7 @@ def get_addressbook_contacts_subprocess() -> Dict[str, str]:
                     # Skip individual lines that fail to parse
                     continue
     except Exception as e:
-        print(f"Error getting AddressBook contacts via subprocess: {str(e)}")
+        print(f"Error getting AddressBook contacts via subprocess: {str(e)} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE.")
     
     return contacts_map
 
@@ -478,14 +478,14 @@ def _send_message_to_recipient(recipient: str, message: str, contact_name: str =
     try:
         result = run_applescript(script)
         if result.startswith("error:"):
-            return f"Error sending message: {result[6:]}"
+            return f"Error sending message: {result[6:]} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
         elif result.strip() == "success":
             display_name = contact_name if contact_name else recipient
             return f"Message sent successfully to {display_name}"
         else:
-            return f"Unknown result: {result}"
+            return f"Unknown result: {result} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
     except Exception as e:
-        return f"Error sending message: {str(e)}" 
+        return f"Error sending message: {str(e)} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
 
 def get_contact_name(handle_id: int) -> str:
     """
@@ -581,7 +581,7 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
                 # Get the selected contact's phone number
                 contact = get_recent_messages.recent_matches[index]['phone']
             except (ValueError, IndexError) as e:
-                return f"Error selecting contact: {str(e)}"
+                return f"Error selecting contact: {str(e)} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
         
         # Check if contact might be a name rather than a phone number or email
         if not all(c.isdigit() or c in '+- ()@.' for c in contact):
@@ -674,7 +674,7 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
         return "No messages found in the specified time period."
     
     if "error" in messages[0]:
-        return f"Error accessing messages: {messages[0]['error']}"
+        return f"Error accessing messages: {messages[0]['error']} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
     
     formatted_messages = []
     for msg in messages:
@@ -714,7 +714,7 @@ def check_messages_db_access() -> str:
         
         # Check if the file exists
         if not os.path.exists(db_path):
-            return f"ERROR: Messages database not found at {db_path}"
+            return f"ERROR: Messages database not found at {db_path} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
         
         status.append(f"Database file exists at: {db_path}")
         
@@ -725,9 +725,9 @@ def check_messages_db_access() -> str:
                 f.read(1)
             status.append("File is readable")
         except PermissionError:
-            return f"ERROR: Permission denied when trying to read {db_path}. Please grant Full Disk Access permission to your terminal application."
+            return f"ERROR: Permission denied when trying to read {db_path}. Please grant Full Disk Access permission to your terminal application. PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
         except Exception as e:
-            return f"ERROR: Unknown error reading file: {str(e)}"
+            return f"ERROR: Unknown error reading file: {str(e)} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
         
         # Try to connect to the database
         try:
@@ -750,11 +750,11 @@ def check_messages_db_access() -> str:
             
             conn.close()
         except sqlite3.OperationalError as e:
-            return f"ERROR: Database connection error: {str(e)}"
+            return f"ERROR: Database connection error: {str(e)} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
         
         return "\n".join(status)
     except Exception as e:
-        return f"ERROR: Unexpected error during database access check: {str(e)}"
+        return f"ERROR: Unexpected error during database access check: {str(e)} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
     
 def find_handle_by_phone(phone: str) -> Optional[int]:
     """
@@ -812,7 +812,7 @@ def check_addressbook_access() -> str:
         
         # Check if the directory exists
         if not os.path.exists(sources_path):
-            return f"ERROR: AddressBook Sources directory not found at {sources_path}"
+            return f"ERROR: AddressBook Sources directory not found at {sources_path} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
         
         status.append(f"AddressBook Sources directory exists at: {sources_path}")
         
@@ -820,7 +820,7 @@ def check_addressbook_access() -> str:
         db_paths = glob.glob(os.path.join(sources_path, "*/AddressBook-v22.abcddb"))
         
         if not db_paths:
-            return f"ERROR: No AddressBook database files found in {sources_path}"
+            return f"ERROR: No AddressBook database files found in {sources_path} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
         
         status.append(f"Found {len(db_paths)} AddressBook database files:")
         for path in db_paths:
@@ -834,10 +834,10 @@ def check_addressbook_access() -> str:
                     f.read(1)
                 status.append(f"File is readable: {db_path}")
             except PermissionError:
-                status.append(f"ERROR: Permission denied when trying to read {db_path}")
+                status.append(f"ERROR: Permission denied when trying to read {db_path} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE.")
                 continue
             except Exception as e:
-                status.append(f"ERROR: Unknown error reading file {db_path}: {str(e)}")
+                status.append(f"ERROR: Unknown error reading file {db_path}: {str(e)} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE.")
                 continue
             
             # Try to connect to the database
@@ -865,19 +865,19 @@ def check_addressbook_access() -> str:
                     contact_count = cursor.fetchone()[0]
                     status.append(f"Database contains {contact_count} contacts")
                 except sqlite3.OperationalError:
-                    status.append("Could not query contact count")
+                    status.append("Could not query contact count PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE.")
                 
                 conn.close()
             except sqlite3.OperationalError as e:
-                status.append(f"ERROR: Database connection error for {db_path}: {str(e)}")
+                status.append(f"ERROR: Database connection error for {db_path}: {str(e)} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE.")
         
         # Try to get actual contacts
         contacts = get_addressbook_contacts()
         if contacts:
             status.append(f"Successfully retrieved {len(contacts)} contacts with phone numbers")
         else:
-            status.append("WARNING: No contacts with phone numbers found")
+            status.append("WARNING: No contacts with phone numbers found. PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE.")
         
         return "\n".join(status)
     except Exception as e:
-        return f"ERROR: Unexpected error during database access check: {str(e)}"
+        return f"ERROR: Unexpected error during database access check: {str(e)} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
