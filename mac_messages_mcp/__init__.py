@@ -12,7 +12,8 @@ from .messages import (
     normalize_phone_number,
     get_cached_contacts,
     query_addressbook_db,
-    check_addressbook_access
+    check_addressbook_access,
+    find_contact_by_name
 )
 
 __all__ = [
@@ -26,6 +27,7 @@ __all__ = [
     "get_cached_contacts",
     "query_addressbook_db",
     "check_addressbook_access",
+    "find_contact_by_name",
 ]
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"

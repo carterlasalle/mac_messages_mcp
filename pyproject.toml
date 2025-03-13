@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mac-messages-mcp"
-version = "0.2.0"
+version = "0.3.0"
 description = "A bridge for interacting with macOS Messages app through MCP"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -39,8 +39,10 @@ dev = [
     "mypy>=1.0.0",
 ]
 
+# Define both entry points to ensure it works with either name
 [project.scripts]
 mac-messages-mcp = "mac_messages_mcp.server:run_server"
+mac_messages_mcp = "mac_messages_mcp.server:run_server"
 
 [tool.setuptools]
 packages = ["mac_messages_mcp"]
@@ -59,4 +61,4 @@ python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
-disallow_incomplete_defs = true 
+disallow_incomplete_defs = true
