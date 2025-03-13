@@ -8,7 +8,7 @@ import subprocess
 import json
 import time
 import difflib
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict, Any, Tuple
 import glob
 
@@ -633,11 +633,11 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
                 return f"Could not find any messages with contact '{contact}'. Verify the phone number or email is correct."
     
     # Calculate the timestamp for X hours ago
-    current_time = datetime.now()
+    current_time = datetime.now(timezone.utc)
     hours_ago = current_time - timedelta(hours=hours)
     
     # Convert to Apple's timestamp format (seconds since 2001-01-01)
-    apple_epoch = datetime(2001, 1, 1)
+    apple_epoch = datetime(2001, 1, 1, tzinfo=timezone.utc)
     seconds_since_apple_epoch = int((hours_ago - apple_epoch).total_seconds())
     
     # Make sure we're using a string representation for the timestamp
@@ -678,14 +678,30 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
     
     formatted_messages = []
     for msg in messages:
-        # Convert Apple timestamp to readable date - handle as string first
+        # Convert Apple timestamp to readable date
         try:
-            # First convert to integer safely
-            msg_date_int = int(str(msg["date"]))
-            msg_date = apple_epoch + timedelta(seconds=msg_date_int)
-        except (ValueError, TypeError, OverflowError):
+            # Apple uses Mac Absolute Time, which is the number of seconds since 2001-01-01 00:00:00 UTC.
+            # The date column could be in nanoseconds or seconds, so we need to handle both cases
+            msg_timestamp = str(msg["date"])
+            
+            # Check if timestamp is in nanoseconds (length > 10)
+            if len(msg_timestamp) > 10:
+                # Convert nanoseconds to seconds
+                msg_timestamp_seconds = float(msg_timestamp) / 1e9
+            else:
+                # Already in seconds
+                msg_timestamp_seconds = float(msg_timestamp)
+            
+            # Mac Absolute Time starts from 2001-01-01 00:00:00 UTC
+            msg_date = apple_epoch + timedelta(seconds=msg_timestamp_seconds)
+            
+            # Convert to local timezone for display
+            local_tz = datetime.now().astimezone().tzinfo
+            msg_date = msg_date.replace(tzinfo=timezone.utc).astimezone(local_tz)
+        except (ValueError, TypeError, OverflowError) as e:
             # If conversion fails, use a placeholder
-            msg_date = datetime.now()
+            msg_date = datetime.now().astimezone()
+            print(f"Timestamp conversion error: {e} for timestamp {msg['date']}")
             
         direction = "You" if msg["is_from_me"] else get_contact_name(msg["handle_id"])
         
@@ -694,7 +710,7 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
             continue
             
         formatted_messages.append(
-            f"[{msg_date.strftime('%Y-%m-%d %H:%M:%S')}] {direction}: {msg['text']}"
+            f"[{msg_date.strftime('%Y-%m-%d %H:%M:%S %Z')}] {direction}: {msg['text']}"
         )
     
     if not formatted_messages:
