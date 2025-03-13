@@ -239,8 +239,7 @@ def get_addressbook_contacts() -> Dict[str, str]:
         # This is a temporary workaround until full disk access is granted
         if 'USE_TEST_DATA' in os.environ and os.environ['USE_TEST_DATA'].lower() == 'true':
             contacts = [
-                {"first_name":"DYLAN", "last_name":"WESTHIMER", "phone":"+13108820189"},
-                {"first_name":"Luke", "last_name":"WW", "phone":"+13104359125"}
+                {"first_name":"TEST", "last_name":"TEST", "phone":"+11111111111"}
             ]
             return process_contacts(contacts)
         
