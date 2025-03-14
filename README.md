@@ -2,6 +2,9 @@
 
 A Python bridge for interacting with the macOS Messages app using MCP (Multiple Context Protocol).
 
+![a-diagram-of-a-mac-computer-with-the-tex_FvvnmbaBTFeKy6F2GMlLqA_IfCBMgJARcia1WTH7FaqwA](https://github.com/user-attachments/assets/dbbdaa14-fadd-434d-a265-9e0c0071c11d)
+
+
 ## Features
 
 - Read recent messages from the macOS Messages app
