@@ -770,7 +770,140 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
 # Initialize the static variable for recent matches
 get_recent_messages.recent_matches = []
 
-def _send_message_direct(recipient: str, message: str, contact_name: str = None, group_chat: bool = False) -> str:
+
+def fuzzy_search_messages(
+    search_term: str,
+    hours: int = 24,
+    threshold: float = 0.6,  # Default threshold adjusted for thefuzz
+) -> str:
+    """
+    Fuzzy search for messages containing the search_term within the last N hours.
+
+    Args:
+        search_term: The string to search for in message content.
+        hours: Number of hours to look back (default: 24).
+        threshold: Minimum similarity score (0.0-1.0) to consider a match (default: 0.6 for WRatio).
+                   A lower threshold allows for more lenient matching.
+
+    Returns:
+        Formatted string with matching messages and their scores, or an error/no results message.
+    """
+    # Calculate the timestamp for X hours ago
+    current_time = datetime.now(timezone.utc)
+    hours_ago_dt = current_time - timedelta(hours=hours)
+    apple_epoch = datetime(2001, 1, 1, tzinfo=timezone.utc)
+    seconds_since_apple_epoch = int((hours_ago_dt - apple_epoch).total_seconds())
+    timestamp_str = str(seconds_since_apple_epoch)
+
+    # Build the SQL query to get all messages in the time window
+    # Limiting to 500 messages to avoid performance issues with very large message histories.
+    query = """
+    SELECT
+        m.ROWID,
+        m.date,
+        m.text,
+        m.attributedBody,
+        m.is_from_me,
+        m.handle_id,
+        m.cache_roomnames
+    FROM
+        message m
+    WHERE
+        CAST(m.date AS TEXT) > ?
+    ORDER BY m.date DESC
+    LIMIT 500
+    """
+    params = (timestamp_str,)
+    raw_messages = query_messages_db(query, params)
+
+    if not raw_messages:
+        return f"No messages found in the last {hours} hours to search."
+    if "error" in raw_messages[0]:
+        return f"Error accessing messages: {raw_messages[0]['error']}"
+
+    message_candidates = []
+    for msg_dict in raw_messages:
+        body = msg_dict.get("text") or extract_body_from_attributed(
+            msg_dict.get("attributedBody")
+        )
+        if body and body.strip():
+            message_candidates.append((body, msg_dict))
+
+    if not message_candidates:
+        return f"No message content found to search in the last {hours} hours."
+
+    # --- New fuzzy matching logic using thefuzz ---
+    cleaned_search_term = clean_name(search_term).lower()
+    # thefuzz scores are 0-100. Scale the input threshold (0.0-1.0).
+    scaled_threshold = threshold * 100
+
+    matched_messages_with_scores = []
+    for original_message_text, msg_dict_value in message_candidates:
+        # We use the original_message_text for matching, which might contain HTML entities etc.
+        # clean_name will handle basic cleaning like emoji removal.
+        cleaned_candidate_text = clean_name(original_message_text).lower()
+
+        # Using WRatio for a good balance of matching strategies.
+        score_from_thefuzz = fuzz.WRatio(cleaned_search_term, cleaned_candidate_text)
+
+        if score_from_thefuzz >= scaled_threshold:
+            # Store score as 0.0-1.0 for consistency with how threshold is defined
+            matched_messages_with_scores.append(
+                (original_message_text, msg_dict_value, score_from_thefuzz / 100.0)
+            )
+    matched_messages_with_scores.sort(
+        key=lambda x: x[2], reverse=True
+    )  # Sort by score desc
+
+    if not matched_messages_with_scores:
+        return f"No messages found matching '{search_term}' with a threshold of {threshold} in the last {hours} hours."
+
+    chat_mapping = get_chat_mapping()
+    formatted_results = []
+    for _matched_text, msg_dict, score in matched_messages_with_scores:
+        original_body = (
+            msg_dict.get("text")
+            or extract_body_from_attributed(msg_dict.get("attributedBody"))
+            or "[No displayable content]"
+        )
+
+        apple_offset = (
+            978307200  # Seconds between Unix epoch and Apple epoch (2001-01-01)
+        )
+        msg_timestamp_ns = int(msg_dict["date"])
+        # Ensure timestamp is in seconds for fromtimestamp
+        msg_timestamp_s = (
+            msg_timestamp_ns / 1_000_000_000
+            if len(str(msg_timestamp_ns)) > 10
+            else msg_timestamp_ns
+        )
+        date_val = datetime.fromtimestamp(
+            msg_timestamp_s + apple_offset, tz=timezone.utc
+        )
+        date_str = date_val.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+
+        direction = (
+            "You" if msg_dict["is_from_me"] else get_contact_name(msg_dict["handle_id"])
+        )
+        group_chat_name = (
+            chat_mapping.get(msg_dict.get("cache_roomnames"))
+            if msg_dict.get("cache_roomnames")
+            else None
+        )
+        message_prefix = f"[{date_str}] (Score: {score:.2f})" + (
+            f" [{group_chat_name}]" if group_chat_name else ""
+        )
+        formatted_results.append(f"{message_prefix} {direction}: {original_body}")
+
+    return (
+        f"Found {len(matched_messages_with_scores)} messages matching '{search_term}':\n"
+        + "\n".join(formatted_results)
+    )
+
+
+def _send_message_direct(
+    recipient: str, message: str, contact_name: str = None, group_chat: bool = False
+) -> str:
     """
     Fallback direct AppleScript method for sending messages.
     """

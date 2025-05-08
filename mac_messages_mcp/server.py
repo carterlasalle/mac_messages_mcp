@@ -2,6 +2,7 @@
 """
 Mac Messages MCP - Entry point fixed for proper MCP protocol implementation
 """
+
 import sys
 import logging
 import asyncio
@@ -13,7 +14,8 @@ from mac_messages_mcp.messages import (
     check_messages_db_access,
     get_cached_contacts,
     check_addressbook_access,
-    query_messages_db
+    query_messages_db,
+    fuzzy_search_messages,
 )
 
 # Configure logging to stderr for debugging
@@ -185,6 +187,38 @@ def tool_get_chats(ctx: Context) -> str:
     except Exception as e:
         logger.error(f"Error getting chats: {str(e)}")
         return f"Error getting chats: {str(e)}"
+
+
+@mcp.tool()
+def tool_fuzzy_search_messages(
+    ctx: Context, search_term: str, hours: int = 24, threshold: float = 0.6
+) -> str:
+    """
+    Fuzzy search for messages containing the search_term within the last N hours.
+    Returns messages that match the search term with a similarity score.
+
+    Args:
+        search_term: The text to search for in messages.
+        hours: How many hours back to search (default 24). Must be positive.
+        threshold: Similarity threshold for matching (0.0 to 1.0, default 0.6). Lower is more lenient.
+    """
+    if not (0.0 <= threshold <= 1.0):
+        return "Error: Threshold must be between 0.0 and 1.0."
+    if hours <= 0:
+        return "Error: Hours must be a positive integer."
+
+    logger.info(
+        f"Tool: Fuzzy searching messages for '{search_term}' in last {hours} hours with threshold {threshold}"
+    )
+    try:
+        result = fuzzy_search_messages(
+            search_term=search_term, hours=hours, threshold=threshold
+        )
+        return result
+    except Exception as e:
+        logger.error(f"Error in tool_fuzzy_search_messages: {e}", exc_info=True)
+        return f"An unexpected error occurred during fuzzy message search: {str(e)}"
+
 
 @mcp.resource("messages://recent/{hours}")
 def get_recent_messages_resource(hours: int = 24) -> str:
