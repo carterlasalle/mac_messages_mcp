@@ -7,6 +7,12 @@ A Python bridge for interacting with the macOS Messages app using MCP (Multiple 
 ![a-diagram-of-a-mac-computer-with-the-tex_FvvnmbaBTFeKy6F2GMlLqA_IfCBMgJARcia1WTH7FaqwA](https://github.com/user-attachments/assets/dbbdaa14-fadd-434d-a265-9e0c0071c11d)
 
 [![Verified on MseeP](https://mseep.ai/badge.svg)](https://mseep.ai/app/fdc62324-6ac9-44e2-8926-722d1157759a)
+
+
+<a href="https://glama.ai/mcp/servers/gxvaoc9znc">
+  <img width="380" height="200" src="https://glama.ai/mcp/servers/gxvaoc9znc/badge" />
+</a>
+
 ## Features
 
 - Read recent messages from the macOS Messages app
@@ -141,9 +147,6 @@ MIT
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request. 
+## Star History
 
-
-
-<a href="https://glama.ai/mcp/servers/gxvaoc9znc">
-  <img width="380" height="200" src="https://glama.ai/mcp/servers/gxvaoc9znc/badge" />
-</a>
+[![Star History Chart](https://api.star-history.com/svg?repos=carterlasalle/mac_messages_mcp&type=Date)](https://www.star-history.com/#carterlasalle/mac_messages_mcp&Date)
