@@ -493,7 +493,26 @@ def _send_message_to_recipient(recipient: str, message: str, contact_name: str =
         
         # Adjust the AppleScript command based on whether this is a group chat
         if not group_chat:
-            command = f'tell application "Messages" to send (read (POSIX file "{file_path}") as «class utf8») to buddy "{recipient}"'
+            # Taken from https://gist.github.com/hepcat72/6b7abd9000e8b108ecdb76e12da1257e
+            command = """
+	        set phoneNumber to {}
+	        set message to {}
+	        tell application "Messages"
+		        set smsMessageType to id of 1st account whose service type = SMS
+		        set smsRecipient to participant phoneNumber of account id smsMessageType
+		        set iMessageType to (id of 1st account whose service type = iMessage)
+		        set iMessageRecipient to participant phoneNumber of account id iMessageType
+		    try
+			    send message to iMessageRecipient
+		    on error
+			    try
+				    send message to smsRecipient
+			    on error errmsg
+				    set the end of errors to errmsg
+			    end try
+		    end try
+	        end tell
+            """.format(recipient, message)
         else:
             command = f'tell application "Messages" to send (read (POSIX file "{file_path}") as «class utf8») to chat "{recipient}"'
         
@@ -640,7 +659,7 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
             query = "SELECT ROWID FROM handle WHERE id = ?"
             results = query_messages_db(query, (contact,))
             if results and not "error" in results[0] and len(results) > 0:
-                handle_id = results[0]["ROWID"]
+                handle_id = [row["ROWID"] for row in results]
         else:
             # This is a phone number - try various formats
             handle_id = find_handle_by_phone(contact)
@@ -1025,7 +1044,7 @@ def check_messages_db_access() -> str:
     except Exception as e:
         return f"ERROR: Unexpected error during database access check: {str(e)} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
     
-def find_handle_by_phone(phone: str) -> Optional[int]:
+def find_handle_by_phone(phone: str) -> Optional[List[int]]:
     """
     Find a handle ID by phone number, trying various formats.
     
@@ -1057,6 +1076,7 @@ def find_handle_by_phone(phone: str) -> Optional[int]:
     SELECT ROWID FROM handle 
     WHERE id IN ({placeholders})
     OR id IN ({placeholders})
+    AND service != 'RCS'
     """
     
     # Create parameters list with both the raw formats and with "+" prefix
@@ -1069,8 +1089,8 @@ def find_handle_by_phone(phone: str) -> Optional[int]:
     
     if len(results) == 0:
         return None
-    
-    return results[0]["ROWID"]
+
+    return [row["ROWID"] for row in results]
 
 def check_addressbook_access() -> str:
     """Check if the AddressBook database is accessible and return detailed information."""
