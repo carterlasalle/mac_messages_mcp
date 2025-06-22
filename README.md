@@ -15,10 +15,13 @@ A Python bridge for interacting with the macOS Messages app using MCP (Multiple 
 
 ## Features
 
-- Read recent messages from the macOS Messages app
-- Filter messages by contact
-- Send new messages through iMessage
-- Access messages via an API
+- **Universal Message Sending**: Automatically sends via iMessage or SMS/RCS based on recipient availability
+- **Smart Fallback**: Seamless fallback to SMS when iMessage is unavailable (perfect for Android users)
+- **Message Reading**: Read recent messages from the macOS Messages app
+- **Contact Filtering**: Filter messages by specific contacts or phone numbers
+- **Fuzzy Search**: Search through message content with intelligent matching
+- **iMessage Detection**: Check if recipients have iMessage before sending
+- **Cross-Platform**: Works with both iPhone/Mac users (iMessage) and Android users (SMS/RCS)
 
 ## Prerequisites
 
@@ -101,6 +104,25 @@ uv install -e .
 
 ## Usage
 
+### Smart Message Delivery
+
+Mac Messages MCP automatically handles message delivery across different platforms:
+
+- **iMessage Users** (iPhone, iPad, Mac): Messages sent via iMessage
+- **Android Users**: Messages automatically fall back to SMS/RCS
+- **Mixed Groups**: Optimal delivery method chosen per recipient
+
+```python
+# Send to iPhone user - uses iMessage
+send_message("+1234567890", "Hey! This goes via iMessage")
+
+# Send to Android user - automatically uses SMS
+send_message("+1987654321", "Hey! This goes via SMS") 
+
+# Check delivery method before sending
+check_imessage_availability("+1234567890")  # Returns availability status
+```
+
 ### As a Module
 
 ```python
@@ -110,9 +132,9 @@ from mac_messages_mcp import get_recent_messages, send_message
 messages = get_recent_messages(hours=48)
 print(messages)
 
-# Send a message
+# Send a message (automatically chooses iMessage or SMS)
 result = send_message(recipient="+1234567890", message="Hello from Mac Messages MCP!")
-print(result)
+print(result)  # Shows whether sent via iMessage or SMS
 ```
 
 ### As a Command-Line Tool

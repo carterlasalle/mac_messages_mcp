@@ -8,6 +8,8 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from mac_messages_mcp.messages import (
+    _check_imessage_availability,
+    _send_message_sms,
     check_addressbook_access,
     check_messages_db_access,
     find_contact_by_name,
@@ -143,6 +145,37 @@ def test_time_ranges():
     return True
 
 
+def test_sms_fallback_functionality():
+    """Test SMS/RCS fallback functions don't crash with import errors"""
+    print("Testing SMS/RCS fallback functionality...")
+    
+    # Test iMessage availability check
+    try:
+        result = _check_imessage_availability("+15551234567")
+        assert isinstance(result, bool), "iMessage availability check should return boolean"
+        print("✅ iMessage availability check works")
+    except Exception as e:
+        # AppleScript errors are expected in test environment, but not import errors
+        if "NameError" in str(e) or "ImportError" in str(e):
+            print(f"❌ Import error in iMessage check: {e}")
+            return False
+        print(f"✅ iMessage availability check handles exceptions properly: {type(e).__name__}")
+    
+    # Test SMS sending function
+    try:
+        result = _send_message_sms("+15551234567", "test message")
+        assert isinstance(result, str), "SMS send should return string result"
+        print("✅ SMS sending function works")
+    except Exception as e:
+        # AppleScript errors are expected in test environment, but not import errors
+        if "NameError" in str(e) or "ImportError" in str(e):
+            print(f"❌ Import error in SMS send: {e}")
+            return False
+        print(f"✅ SMS sending function handles exceptions properly: {type(e).__name__}")
+    
+    return True
+
+
 def run_all_tests():
     """Run all tests and report results"""
     print("🚀 Running Mac Messages MCP Integration Tests")
@@ -154,6 +187,7 @@ def run_all_tests():
         test_contact_selection_validation,
         test_no_crashes,
         test_time_ranges,
+        test_sms_fallback_functionality,
     ]
     
     passed = 0

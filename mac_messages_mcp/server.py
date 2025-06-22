@@ -3,19 +3,22 @@
 Mac Messages MCP - Entry point fixed for proper MCP protocol implementation
 """
 
-import sys
-import logging
 import asyncio
-from mcp.server.fastmcp import FastMCP, Context
+import logging
+import sys
+
+from mcp.server.fastmcp import Context, FastMCP
+
 from mac_messages_mcp.messages import (
-    get_recent_messages,
-    send_message,
-    find_contact_by_name,
-    check_messages_db_access,
-    get_cached_contacts,
+    _check_imessage_availability,
     check_addressbook_access,
-    query_messages_db,
+    check_messages_db_access,
+    find_contact_by_name,
     fuzzy_search_messages,
+    get_cached_contacts,
+    get_recent_messages,
+    query_messages_db,
+    send_message,
 )
 
 # Configure logging to stderr for debugging
@@ -188,6 +191,34 @@ def tool_get_chats(ctx: Context) -> str:
         logger.error(f"Error getting chats: {str(e)}")
         return f"Error getting chats: {str(e)}"
 
+
+@mcp.tool()
+def tool_check_imessage_availability(ctx: Context, recipient: str) -> str:
+    """
+    Check if a recipient has iMessage available.
+    
+    This tool helps determine whether to send via iMessage or SMS/RCS.
+    Useful for debugging delivery issues or choosing the right service.
+    
+    Args:
+        recipient: Phone number or email to check for iMessage availability
+    """
+    logger.info(f"Checking iMessage availability for: {recipient}")
+    try:
+        recipient = str(recipient)
+        has_imessage = _check_imessage_availability(recipient)
+        
+        if has_imessage:
+            return f"✅ {recipient} has iMessage available - messages will be sent via iMessage"
+        else:
+            # Check if it looks like a phone number for SMS fallback
+            if any(c.isdigit() for c in recipient):
+                return f"📱 {recipient} does not have iMessage - messages will automatically fall back to SMS/RCS"
+            else:
+                return f"❌ {recipient} does not have iMessage and SMS is not available for email addresses"
+    except Exception as e:
+        logger.error(f"Error checking iMessage availability: {str(e)}")
+        return f"Error checking iMessage availability: {str(e)}"
 
 @mcp.tool()
 def tool_fuzzy_search_messages(

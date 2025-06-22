@@ -947,47 +947,114 @@ def fuzzy_search_messages(
     )
 
 
+def _check_imessage_availability(recipient: str) -> bool:
+    """
+    Check if recipient has iMessage available.
+    
+    Args:
+        recipient: Phone number or email to check
+        
+    Returns:
+        True if iMessage is available, False otherwise
+    """
+    safe_recipient = recipient.replace('"', '\\"')
+    
+    script = f'''
+    tell application "Messages"
+        try
+            set targetService to 1st service whose service type = iMessage
+            set targetBuddy to buddy "{safe_recipient}" of targetService
+            
+            -- Check if buddy exists and has iMessage capability
+            if targetBuddy exists then
+                return "true"
+            else
+                return "false"
+            end if
+        on error
+            return "false"
+        end try
+    end tell
+    '''
+    
+    try:
+        result = run_applescript(script)
+        return result.strip().lower() == "true"
+    except:
+        return False
+
+def _send_message_sms(recipient: str, message: str, contact_name: str = None) -> str:
+    """
+    Send message via SMS/RCS using AppleScript.
+    
+    Args:
+        recipient: Phone number to send to
+        message: Message content
+        contact_name: Optional contact name for display
+        
+    Returns:
+        Success or error message
+    """
+    safe_message = message.replace('"', '\\"').replace('\\', '\\\\')
+    safe_recipient = recipient.replace('"', '\\"')
+    
+    script = f'''
+    tell application "Messages"
+        try
+            -- Try to find SMS service
+            set smsService to first account whose service type = SMS and enabled is true
+            
+            -- Send message via SMS
+            send "{safe_message}" to participant "{safe_recipient}" of smsService
+            
+            -- Wait briefly to check for immediate errors
+            delay 1
+            
+            return "success"
+        on error errMsg
+            return "error:" & errMsg
+        end try
+    end tell
+    '''
+    
+    try:
+        result = run_applescript(script)
+        if result.startswith("error:"):
+            return f"Error sending SMS: {result[6:]}"
+        elif result.strip() == "success":
+            display_name = contact_name if contact_name else recipient
+            return f"SMS sent successfully to {display_name}"
+        else:
+            return f"Unknown SMS result: {result}"
+    except Exception as e:
+        return f"Error sending SMS: {str(e)}"
+
 def _send_message_direct(
     recipient: str, message: str, contact_name: str = None, group_chat: bool = False
 ) -> str:
     """
-    Fallback direct AppleScript method for sending messages.
+    Enhanced direct AppleScript method for sending messages with SMS/RCS fallback.
+    
+    This function implements automatic fallback from iMessage to SMS/RCS when:
+    1. Recipient doesn't have iMessage
+    2. iMessage delivery fails
+    3. iMessage service is unavailable
+    
+    Args:
+        recipient: Phone number or email
+        message: Message content
+        contact_name: Optional contact name for display
+        group_chat: Whether this is a group chat
+        
+    Returns:
+        Success or error message with service type used
     """
     # Clean the inputs for AppleScript
     safe_message = message.replace('"', '\\"').replace('\\', '\\\\')
     safe_recipient = recipient.replace('"', '\\"')
     
-    # Different script based on group_chat flag
-    if not group_chat:
-        script = f'''
-        tell application "Messages"
-            set targetService to 1st service whose service type = iMessage
-            
-            try
-                -- Try to get the existing buddy if possible
-                set targetBuddy to buddy "{safe_recipient}" of targetService
-                
-                -- Send the message
-                send "{safe_message}" to targetBuddy
-                
-                -- Wait briefly to check for immediate errors
-                delay 1
-                
-                -- Return success
-                return "success"
-            on error errMsg
-                -- If getting buddy fails, try to create a new conversation
-                try
-                    set newMessage to send "{safe_message}" to "{safe_recipient}"
-                    return "success"
-                on error errMsg2
-                    -- Both methods failed
-                    return "error:" & errMsg2
-                end try
-            end try
-        end tell
-        '''
-    else:
+    # For group chats, stick to iMessage only (SMS doesn't support group chats well)
+    if group_chat:
         script = f'''
         tell application "Messages"
             try
@@ -1008,13 +1075,78 @@ def _send_message_direct(
             end try
         end tell
         '''
+        
+        try:
+            result = run_applescript(script)
+            if result.startswith("error:"):
+                return f"Error sending group message: {result[6:]}"
+            elif result.strip() == "success":
+                display_name = contact_name if contact_name else recipient
+                return f"Group message sent successfully to {display_name}"
+            else:
+                return f"Unknown group message result: {result}"
+        except Exception as e:
+            return f"Error sending group message: {str(e)}"
+    
+    # For individual messages, try iMessage first with automatic SMS fallback
+    # Enhanced AppleScript with built-in fallback logic
+    script = f'''
+    tell application "Messages"
+        try
+            -- First, try iMessage
+            set targetService to 1st service whose service type = iMessage
+            
+            try
+                -- Try to get the existing buddy if possible
+                set targetBuddy to buddy "{safe_recipient}" of targetService
+                
+                -- Send the message via iMessage
+                send "{safe_message}" to targetBuddy
+                
+                -- Wait briefly to check for immediate errors
+                delay 2
+                
+                -- Return success with service type
+                return "success:iMessage"
+            on error iMessageErr
+                -- iMessage failed, try SMS fallback if recipient looks like a phone number
+                try
+                    -- Check if recipient looks like a phone number (contains digits)
+                    if "{safe_recipient}" contains "0" or "{safe_recipient}" contains "1" or "{safe_recipient}" contains "2" or "{safe_recipient}" contains "3" or "{safe_recipient}" contains "4" or "{safe_recipient}" contains "5" or "{safe_recipient}" contains "6" or "{safe_recipient}" contains "7" or "{safe_recipient}" contains "8" or "{safe_recipient}" contains "9" then
+                        -- Try SMS service
+                        set smsService to first account whose service type = SMS and enabled is true
+                        send "{safe_message}" to participant "{safe_recipient}" of smsService
+                        
+                        -- Wait briefly to check for immediate errors
+                        delay 2
+                        
+                        return "success:SMS"
+                    else
+                        -- Not a phone number, can't use SMS
+                        return "error:iMessage failed and SMS not available for email addresses - " & iMessageErr
+                    end if
+                on error smsErr
+                    -- Both iMessage and SMS failed
+                    return "error:Both iMessage and SMS failed - iMessage: " & iMessageErr & " SMS: " & smsErr
+                end try
+            end try
+        on error generalErr
+            return "error:" & generalErr
+        end try
+    end tell
+    '''
     
     try:
         result = run_applescript(script)
+        display_name = contact_name if contact_name else recipient
+        
         if result.startswith("error:"):
             return f"Error sending message: {result[6:]}"
+        elif result.strip() == "success:iMessage":
+            return f"Message sent successfully via iMessage to {display_name}"
+        elif result.strip() == "success:SMS":
+            return f"Message sent successfully via SMS to {display_name} (iMessage not available)"
         elif result.strip() == "success":
-            display_name = contact_name if contact_name else recipient
             return f"Message sent successfully to {display_name}"
         else:
             return f"Unknown result: {result}"
