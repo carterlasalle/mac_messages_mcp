@@ -17,9 +17,11 @@ A Python bridge for interacting with the macOS Messages app using MCP (Multiple 
 
 ### For Cursor Users
 
-**[📱 One-Click Install for Cursor](cursor://anysphere.cursor-deeplink/mcp/install?name=messages&config=eyJtZXNzYWdlcyI6eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyJtYWMtbWVzc2FnZXMtbWNwIl19fQ==)** 
+<a href="cursor://anysphere.cursor-deeplink/mcp/install?name=messages&config=eyJtZXNzYWdlcyI6eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyJtYWMtbWVzc2FnZXMtbWNwIl19fQ==">
+  <img src="https://img.shields.io/badge/Add_to_Cursor-📱_One--Click_Install-blue?style=for-the-badge&logo=cursor&logoColor=white" alt="Add Mac Messages MCP to Cursor" />
+</a>
 
-*Click the link above to automatically add Mac Messages MCP to Cursor*
+*Click the button above to automatically add Mac Messages MCP to Cursor*
 
 ### For Claude Desktop Users
 
@@ -89,9 +91,9 @@ To grant Full Disk Access:
 
 #### Option 1: One-Click Install (Recommended)
 
-Click this link to automatically install Mac Messages MCP in Cursor:
-
-**[📱 Add Mac Messages MCP to Cursor](cursor://anysphere.cursor-deeplink/mcp/install?name=messages&config=eyJtZXNzYWdlcyI6eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyJtYWMtbWVzc2FnZXMtbWNwIl19fQ==)**
+<a href="cursor://anysphere.cursor-deeplink/mcp/install?name=messages&config=eyJtZXNzYWdlcyI6eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyJtYWMtbWVzc2FnZXMtbWNwIl19fQ==">
+  <img src="https://img.shields.io/badge/Add_to_Cursor-📱_One--Click_Install-blue?style=for-the-badge&logo=cursor&logoColor=white" alt="Add Mac Messages MCP to Cursor" />
+</a>
 
 #### Option 2: Manual Setup
 
