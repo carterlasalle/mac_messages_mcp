@@ -13,6 +13,18 @@ A Python bridge for interacting with the macOS Messages app using MCP (Multiple 
   <img width="380" height="200" src="https://glama.ai/mcp/servers/gxvaoc9znc/badge" />
 </a>
 
+## Quick Install
+
+### For Cursor Users
+
+**[📱 One-Click Install for Cursor](cursor://anysphere.cursor-deeplink/mcp/install?name=messages&config=eyJtZXNzYWdlcyI6eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyJtYWMtbWVzc2FnZXMtbWNwIl19fQ==)** 
+
+*Click the link above to automatically add Mac Messages MCP to Cursor*
+
+### For Claude Desktop Users
+
+See the [Integration section](#integration) below for setup instructions.
+
 ## Features
 
 - **Universal Message Sending**: Automatically sends via iMessage or SMS/RCS based on recipient availability
@@ -74,6 +86,14 @@ To grant Full Disk Access:
 ```
 
 ### Cursor Integration
+
+#### Option 1: One-Click Install (Recommended)
+
+Click this link to automatically install Mac Messages MCP in Cursor:
+
+**[📱 Add Mac Messages MCP to Cursor](cursor://anysphere.cursor-deeplink/mcp/install?name=messages&config=eyJtZXNzYWdlcyI6eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyJtYWMtbWVzc2FnZXMtbWNwIl19fQ==)**
+
+#### Option 2: Manual Setup
 
 Go to **Cursor Settings** > **MCP** and paste this as a command:
 
