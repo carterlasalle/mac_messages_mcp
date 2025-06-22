@@ -1152,7 +1152,7 @@ def _send_message_direct(
             return f"Unknown result: {result}"
     except Exception as e:
         return f"Error sending message: {str(e)}"
-    
+
 def check_messages_db_access() -> str:
     """Check if the Messages database is accessible and return detailed information."""
     try:

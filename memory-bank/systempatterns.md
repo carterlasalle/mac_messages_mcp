@@ -110,7 +110,7 @@ Tool status after comprehensive testing:
 ### State Management
 - **Stateless Operations**: Each tool call is independent
 - **Caching Strategy**: Contact data cached for performance
-- **Session Context**: Recent contact matches stored for disambiguation  
+- **Session Context**: Recent contact matches stored for disambiguation
 - **Crash State**: Multiple tools cause server errors or return no useful data
 
 ### Permission Model
