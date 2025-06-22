@@ -1,16 +1,19 @@
 """
 Core functionality for interacting with macOS Messages app
 """
+import difflib
+import glob
+import json
 import os
 import re
 import sqlite3
 import subprocess
-import json
 import time
-import difflib
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional, Dict, Any, Tuple
-import glob
+from typing import Any, Dict, List, Optional, Tuple
+
+from thefuzz import fuzz
+
 
 def run_applescript(script: str) -> str:
     """Run an AppleScript and return the result."""
@@ -589,6 +592,15 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
     Returns:
         Formatted string with recent messages
     """
+    # Input validation
+    if hours < 0:
+        return "Error: Hours cannot be negative. Please provide a positive number."
+    
+    # Prevent integer overflow - limit to reasonable maximum (10 years)
+    MAX_HOURS = 10 * 365 * 24  # 87,600 hours
+    if hours > MAX_HOURS:
+        return f"Error: Hours value too large. Maximum allowed is {MAX_HOURS} hours (10 years)."
+    
     handle_id = None
     
     # If contact is specified, try to resolve it
@@ -599,20 +611,32 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
         # Handle contact selection format (contact:N)
         if contact.lower().startswith("contact:"):
             try:
+                # Extract the number after the colon
+                contact_parts = contact.split(":", 1)
+                if len(contact_parts) < 2 or not contact_parts[1].strip():
+                    return "Error: Invalid contact selection format. Use 'contact:N' where N is a positive number."
+                
                 # Get the selected index (1-based)
-                index = int(contact.split(":", 1)[1].strip()) - 1
+                try:
+                    index = int(contact_parts[1].strip()) - 1
+                except ValueError:
+                    return "Error: Contact selection must be a number. Use 'contact:N' where N is a positive number."
+                
+                # Validate index is not negative
+                if index < 0:
+                    return "Error: Contact selection must be a positive number (starting from 1)."
                 
                 # Get the most recent contact matches from global cache
                 if not hasattr(get_recent_messages, "recent_matches") or not get_recent_messages.recent_matches:
                     return "No recent contact matches available. Please search for a contact first."
                 
-                if index < 0 or index >= len(get_recent_messages.recent_matches):
+                if index >= len(get_recent_messages.recent_matches):
                     return f"Invalid selection. Please choose a number between 1 and {len(get_recent_messages.recent_matches)}."
                 
                 # Get the selected contact's phone number
                 contact = get_recent_messages.recent_matches[index]['phone']
-            except (ValueError, IndexError) as e:
-                return f"Error selecting contact: {str(e)}"
+            except Exception as e:
+                return f"Error processing contact selection: {str(e)}"
         
         # Check if contact might be a name rather than a phone number or email
         if not all(c.isdigit() or c in '+- ()@.' for c in contact):
@@ -667,13 +691,17 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
     current_time = datetime.now(timezone.utc)
     hours_ago = current_time - timedelta(hours=hours)
     
-    # Convert to Apple's timestamp format (seconds since 2001-01-01)
+    # Convert to Apple's timestamp format (nanoseconds since 2001-01-01)
+    # Apple's Core Data uses nanoseconds, not seconds
     apple_epoch = datetime(2001, 1, 1, tzinfo=timezone.utc)
-    seconds_since_apple_epoch = int((hours_ago - apple_epoch).total_seconds())
+    seconds_since_apple_epoch = (hours_ago - apple_epoch).total_seconds()
+    
+    # Convert to nanoseconds (Apple's format)
+    nanoseconds_since_apple_epoch = int(seconds_since_apple_epoch * 1_000_000_000)
     
     # Make sure we're using a string representation for the timestamp
     # to avoid integer overflow issues when binding to SQLite
-    timestamp_str = str(seconds_since_apple_epoch)
+    timestamp_str = str(nanoseconds_since_apple_epoch)
     
     # Build the SQL query - use attributedBody field and text
     query = """
@@ -788,12 +816,30 @@ def fuzzy_search_messages(
     Returns:
         Formatted string with matching messages and their scores, or an error/no results message.
     """
+    # Input validation
+    if not search_term or not search_term.strip():
+        return "Error: Search term cannot be empty."
+    
+    if hours < 0:
+        return "Error: Hours cannot be negative. Please provide a positive number."
+    
+    # Prevent integer overflow - limit to reasonable maximum (10 years)
+    MAX_HOURS = 10 * 365 * 24  # 87,600 hours
+    if hours > MAX_HOURS:
+        return f"Error: Hours value too large. Maximum allowed is {MAX_HOURS} hours (10 years)."
+    
+    if not (0.0 <= threshold <= 1.0):
+        return "Error: Threshold must be between 0.0 and 1.0."
+    
     # Calculate the timestamp for X hours ago
     current_time = datetime.now(timezone.utc)
     hours_ago_dt = current_time - timedelta(hours=hours)
     apple_epoch = datetime(2001, 1, 1, tzinfo=timezone.utc)
-    seconds_since_apple_epoch = int((hours_ago_dt - apple_epoch).total_seconds())
-    timestamp_str = str(seconds_since_apple_epoch)
+    seconds_since_apple_epoch = (hours_ago_dt - apple_epoch).total_seconds()
+    
+    # Convert to nanoseconds (Apple's format)
+    nanoseconds_since_apple_epoch = int(seconds_since_apple_epoch * 1_000_000_000)
+    timestamp_str = str(nanoseconds_since_apple_epoch)
 
     # Build the SQL query to get all messages in the time window
     # Limiting to 500 messages to avoid performance issues with very large message histories.
