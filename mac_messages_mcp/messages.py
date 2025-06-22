@@ -1206,6 +1206,7 @@ def check_messages_db_access() -> str:
 def find_handle_by_phone(phone: str) -> Optional[int]:
     """
     Find a handle ID by phone number, trying various formats.
+    Prioritizes direct message handles over group chat handles.
     
     Args:
         phone: Phone number in any format
@@ -1229,12 +1230,26 @@ def find_handle_by_phone(phone: str) -> Optional[int]:
         # Try with the country code
         formats_to_try.append('1' + normalized)
     
-    # Query for the handle ID using OR conditions
+    # Enhanced query that helps distinguish between direct messages and group chats
+    # We'll get all matching handles with additional context
     placeholders = ', '.join(['?' for _ in formats_to_try])
     query = f"""
-    SELECT ROWID FROM handle 
-    WHERE id IN ({placeholders})
-    OR id IN ({placeholders})
+    SELECT 
+        h.ROWID,
+        h.id,
+        COUNT(DISTINCT chj.chat_id) as chat_count,
+        MIN(chj.chat_id) as min_chat_id,
+        GROUP_CONCAT(DISTINCT c.display_name) as chat_names
+    FROM handle h
+    LEFT JOIN chat_handle_join chj ON h.ROWID = chj.handle_id
+    LEFT JOIN chat c ON chj.chat_id = c.ROWID
+    WHERE h.id IN ({placeholders}) OR h.id IN ({placeholders})
+    GROUP BY h.ROWID, h.id
+    ORDER BY 
+        -- Prioritize handles with fewer chats (likely direct messages)
+        chat_count ASC,
+        -- Then by smallest ROWID (older/more established handles)
+        h.ROWID ASC
     """
     
     # Create parameters list with both the raw formats and with "+" prefix
@@ -1248,6 +1263,8 @@ def find_handle_by_phone(phone: str) -> Optional[int]:
     if len(results) == 0:
         return None
     
+    # Return the first result (best match based on our ordering)
+    # Our query orders by chat_count ASC (direct messages first) then ROWID ASC
     return results[0]["ROWID"]
 
 def check_addressbook_access() -> str:
