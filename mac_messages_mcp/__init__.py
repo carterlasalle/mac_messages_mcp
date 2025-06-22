@@ -34,4 +34,4 @@ __all__ = [
     "fuzzy_search_messages",
 ]
 
-__version__ = "0.7.2"
+__version__ = "0.7.3"
