@@ -6,7 +6,7 @@ from .messages import (
     check_addressbook_access,
     check_messages_db_access,
     find_contact_by_name,
-    find_handle_by_phone,
+    find_handles_by_phone,
     fuzzy_search_messages,
     get_addressbook_contacts,
     get_cached_contacts,
@@ -30,7 +30,7 @@ __all__ = [
     "query_addressbook_db",
     "check_addressbook_access",
     "find_contact_by_name",
-    "find_handle_by_phone",
+    "find_handles_by_phone",
     "fuzzy_search_messages",
 ]
 
