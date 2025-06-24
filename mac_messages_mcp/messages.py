@@ -946,6 +946,31 @@ def fuzzy_search_messages(
         + "\n".join(formatted_results)
     )
 
+def _get_phone_formats(recipient:str) -> list[str]:
+    """
+    Get different phone recipient formats. Assumes the recipient given has already been normalized.
+
+    Args:
+        recipient: Normalized phone recipient
+
+    Returns:
+        List of phone recipients in various formats
+    """
+    # Start with the normalized input
+    formats_to_try = [recipient]  
+    
+    # For US recipients, try with and without country code
+    if recipient.startswith('1') and len(recipient) > 10:
+        # Try without the country code
+        formats_to_try.append(recipient[1:])
+        formats_to_try.append('+' + recipient)
+
+    elif len(recipient) == 10:
+        # Try with the country code
+        formats_to_try.append('1' + recipient)
+        formats_to_try.append('+1' + recipient)
+
+    return formats_to_try
 
 def _check_imessage_availability(recipient: str) -> bool:
     """
@@ -957,31 +982,38 @@ def _check_imessage_availability(recipient: str) -> bool:
     Returns:
         True if iMessage is available, False otherwise
     """
-    safe_recipient = recipient.replace('"', '\\"')
+    query_params = ()
+
+    if '@' in recipient:
+        placeholders = "?"
+        query_params = (recipient,)
+
+    else:
+        normalized = normalize_phone_number(recipient)
+
+        if normalized is None:
+            raise ValueError("The argument provided is either not a number or cannot be normalized")
+
+        query_params = tuple(_get_phone_formats(normalized))    
+
+        placeholders = ', '.join(['?' for _ in query_params])
+
+    query = f"""
+        SELECT 
+        h.ROWID,
+        h.service
+        FROM handle h
+        WHERE h.id IN ({placeholders}) 
+        """
     
-    script = f'''
-    tell application "Messages"
-        try
-            set targetService to 1st service whose service type = iMessage
-            set targetBuddy to buddy "{safe_recipient}" of targetService
-            
-            -- Check if buddy exists and has iMessage capability
-            if targetBuddy exists then
-                return "true"
-            else
-                return "false"
-            end if
-        on error
-            return "false"
-        end try
-    end tell
-    '''
-    
-    try:
-        result = run_applescript(script)
-        return result.strip().lower() == "true"
-    except:
-        return False
+    result = query_messages_db(query, query_params)
+    for row in result:
+        serviceType = row['service']
+        # If the recipient has at least one chat that uses iMessage, then return true
+        if 'iMessage' in serviceType or 'iMessageLite' in serviceType:
+            return True
+
+    return False
 
 def _send_message_sms(recipient: str, message: str, contact_name: str = None) -> str:
     """
@@ -1220,16 +1252,8 @@ def find_handle_by_phone(phone: str) -> Optional[int]:
         return None
     
     # Try various formats for US numbers
-    formats_to_try = [normalized]  # Start with the normalized input
-    
-    # For US numbers, try with and without country code
-    if normalized.startswith('1') and len(normalized) > 10:
-        # Try without the country code
-        formats_to_try.append(normalized[1:])
-    elif len(normalized) == 10:
-        # Try with the country code
-        formats_to_try.append('1' + normalized)
-    
+    formats_to_try = _get_phone_formats(normalized) 
+
     # Enhanced query that helps distinguish between direct messages and group chats
     # We'll get all matching handles with additional context
     placeholders = ', '.join(['?' for _ in formats_to_try])
