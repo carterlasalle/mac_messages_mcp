@@ -450,9 +450,12 @@ def send_message(recipient: str, message: str, group_chat: bool = False) -> str:
     # Check if recipient is directly a phone number
     if all(c.isdigit() or c in '+- ()' for c in recipient):
         # Clean the phone number
-        clean_number = ''.join(c for c in recipient if c.isdigit())
+        clean_number = normalize_phone_number(recipient)
         return _send_message_to_recipient(clean_number, message, group_chat=group_chat)
-    
+
+    if "@" in recipient:
+        return _send_message_to_recipient(recipient, message, group_chat=group_chat) 
+
     # Try to find the contact by name
     contacts = find_contact_by_name(recipient)
     
@@ -493,13 +496,41 @@ def _send_message_to_recipient(recipient: str, message: str, contact_name: str =
         
         with open(file_path, 'w') as f:
             f.write(message)
-        
+
+        is_iMessage = _check_imessage_availability(recipient) 
         # Adjust the AppleScript command based on whether this is a group chat
-        if not group_chat:
-            command = f'tell application "Messages" to send (read (POSIX file "{file_path}") as «class utf8») to buddy "{recipient}"'
-        else:
+        if group_chat:
             command = f'tell application "Messages" to send (read (POSIX file "{file_path}") as «class utf8») to chat "{recipient}"'
         
+        # Taken from https://gist.github.com/hepcat72/6b7abd9000e8b108ecdb76e12da1257e
+        elif is_iMessage:
+            command = f"""
+	        set recipient to "{recipient}"
+	        set message to "{message}"
+	        tell application "Messages"
+		        set iMessageType to (id of 1st account whose service type = iMessage)
+		        set iMessageRecipient to participant recipient of account id iMessageType
+			    try
+				    send message to iMessageRecipient
+                    on error errMsg
+                    return "Error: " & errMsg
+		        end try
+	        end tell
+            """ 
+        else:
+            command = f"""
+	        set recipient to "{recipient}"
+	        set message to "{message}"
+	        tell application "Messages"
+		        set smsMessageType to id of 1st account whose service type = SMS
+		        set smsRecipient to participant recipient of account id smsMessageType
+			    try
+				    send message to smsRecipient
+                    on error errMsg
+                    return "Error: " & errMsg
+		        end try
+	        end tell
+            """
         # Run the AppleScript
         result = run_applescript(command)
         
@@ -517,6 +548,7 @@ def _send_message_to_recipient(recipient: str, message: str, contact_name: str =
         # Message sent successfully
         display_name = contact_name if contact_name else recipient
         return f"Message sent successfully to {display_name}"
+
     except Exception as e:
         # Try fallback method
         return _send_message_direct(recipient, message, contact_name, group_chat)
@@ -601,7 +633,7 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
     if hours > MAX_HOURS:
         return f"Error: Hours value too large. Maximum allowed is {MAX_HOURS} hours (10 years)."
     
-    handle_id = None
+    handle_ids = None
     
     # If contact is specified, try to resolve it
     if contact:
@@ -639,7 +671,7 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
                 return f"Error processing contact selection: {str(e)}"
         
         # Check if contact might be a name rather than a phone number or email
-        if not all(c.isdigit() or c in '+- ()@.' for c in contact):
+        if all(not (c.isdigit() or c in '+-()@.') for c in contact):
             # Try fuzzy matching
             matches = find_contact_by_name(contact)
             
@@ -664,12 +696,12 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
             query = "SELECT ROWID FROM handle WHERE id = ?"
             results = query_messages_db(query, (contact,))
             if results and not "error" in results[0] and len(results) > 0:
-                handle_id = results[0]["ROWID"]
+                handle_ids = [row["ROWID"] for row in results]
         else:
             # This is a phone number - try various formats
-            handle_id = find_handle_by_phone(contact)
+            handle_ids = find_handles_by_phone(contact)
             
-        if not handle_id:
+        if not handle_ids:
             # Try a direct search in message table to see if any messages exist
             normalized = normalize_phone_number(contact)
             query = """
@@ -722,9 +754,12 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
     params = (timestamp_str,)
     
     # Add contact filter if handle_id was found
-    if handle_id:
-        query += "AND m.handle_id = ? "
-        params = (timestamp_str, handle_id)
+    if handle_ids:
+        placeholders = ", ".join(["?" for _ in handle_ids]) 
+        query += f"AND m.handle_id in ({placeholders})"
+        params = handle_ids
+        params.insert(0, timestamp_str)
+        params = tuple(params)
     
     query += "ORDER BY m.date DESC LIMIT 100"
     
@@ -1000,18 +1035,28 @@ def _check_imessage_availability(recipient: str) -> bool:
 
     query = f"""
         SELECT 
-        h.ROWID,
-        h.service
+            h.ROWID,
+            h.service,
+            COUNT(m.guid) as text_count,
+            COUNT(CASE WHEN m.error != 0 then 1 END) as errors
         FROM handle h
-        WHERE h.id IN ({placeholders}) 
+        LEFT JOIN message m ON h.ROWID = m.handle_id
+        WHERE h.id IN ({placeholders})
+        GROUP BY
+            h.ROWID,
+            h.service
         """
     
     result = query_messages_db(query, query_params)
     for row in result:
-        serviceType = row['service']
-        # If the recipient has at least one chat that uses iMessage, then return true
-        if 'iMessage' in serviceType or 'iMessageLite' in serviceType:
-            return True
+        service_type = row['service']
+        text_count = row['text_count']
+        num_errors = row['errors']
+
+        # Makes sure that any iMessages accidently sent don't count
+        if num_errors < text_count:
+            if 'iMessage' == service_type or 'iMessageLite' == service_type:
+                return True
 
     return False
 
@@ -1235,16 +1280,15 @@ def check_messages_db_access() -> str:
     except Exception as e:
         return f"ERROR: Unexpected error during database access check: {str(e)} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
     
-def find_handle_by_phone(phone: str) -> Optional[int]:
+def find_handles_by_phone(phone: str) -> Optional[List[int]]:
     """
     Find a handle ID by phone number, trying various formats.
-    Prioritizes direct message handles over group chat handles.
     
     Args:
         phone: Phone number in any format
         
     Returns:
-        handle_id if found, None otherwise
+        List of handle_id 's if found, None otherwise
     """
     # Normalize the phone number (remove all non-digit characters)
     normalized = normalize_phone_number(phone)
@@ -1254,32 +1298,17 @@ def find_handle_by_phone(phone: str) -> Optional[int]:
     # Try various formats for US numbers
     formats_to_try = _get_phone_formats(normalized) 
 
-    # Enhanced query that helps distinguish between direct messages and group chats
-    # We'll get all matching handles with additional context
     placeholders = ', '.join(['?' for _ in formats_to_try])
+
+    # Finds all handle_id's associated with the number
     query = f"""
     SELECT 
-        h.ROWID,
-        h.id,
-        COUNT(DISTINCT chj.chat_id) as chat_count,
-        MIN(chj.chat_id) as min_chat_id,
-        GROUP_CONCAT(DISTINCT c.display_name) as chat_names
-    FROM handle h
-    LEFT JOIN chat_handle_join chj ON h.ROWID = chj.handle_id
-    LEFT JOIN chat c ON chj.chat_id = c.ROWID
-    WHERE h.id IN ({placeholders}) OR h.id IN ({placeholders})
-    GROUP BY h.ROWID, h.id
-    ORDER BY 
-        -- Prioritize handles with fewer chats (likely direct messages)
-        chat_count ASC,
-        -- Then by smallest ROWID (older/more established handles)
-        h.ROWID ASC
+    ROWID
+    FROM handle
+    WHERE id IN ({placeholders})
     """
     
-    # Create parameters list with both the raw formats and with "+" prefix
-    params = formats_to_try + ['+' + f for f in formats_to_try]
-    
-    results = query_messages_db(query, tuple(params))
+    results = query_messages_db(query, tuple(formats_to_try))
     
     if not results or "error" in results[0]:
         return None
@@ -1287,9 +1316,7 @@ def find_handle_by_phone(phone: str) -> Optional[int]:
     if len(results) == 0:
         return None
     
-    # Return the first result (best match based on our ordering)
-    # Our query orders by chat_count ASC (direct messages first) then ROWID ASC
-    return results[0]["ROWID"]
+    return [row["ROWID"] for row in results]
 
 def check_addressbook_access() -> str:
     """Check if the AddressBook database is accessible and return detailed information."""
