@@ -1097,8 +1097,8 @@ def _send_message_direct(
             set targetService to 1st service whose service type = iMessage
             
             try
-                -- Try to get the existing buddy if possible
-                set targetBuddy to buddy "{safe_recipient}" of targetService
+                -- Try to get the existing participant if possible
+                set targetBuddy to participant "{safe_recipient}" of targetService
                 
                 -- Send the message via iMessage
                 send "{safe_message}" to targetBuddy
