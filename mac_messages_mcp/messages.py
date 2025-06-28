@@ -496,7 +496,7 @@ def _send_message_to_recipient(recipient: str, message: str, contact_name: str =
         
         # Adjust the AppleScript command based on whether this is a group chat
         if not group_chat:
-            command = f'tell application "Messages" to send (read (POSIX file "{file_path}") as «class utf8») to buddy "{recipient}"'
+            command = f'tell application "Messages" to send (read (POSIX file "{file_path}") as «class utf8») to participant "{recipient}" of (1st service whose service type = iMessage)'
         else:
             command = f'tell application "Messages" to send (read (POSIX file "{file_path}") as «class utf8») to chat "{recipient}"'
         
@@ -1097,8 +1097,8 @@ def _send_message_direct(
             set targetService to 1st service whose service type = iMessage
             
             try
-                -- Try to get the existing buddy if possible
-                set targetBuddy to buddy "{safe_recipient}" of targetService
+                -- Try to get the existing participant if possible
+                set targetBuddy to participant "{safe_recipient}" of targetService
                 
                 -- Send the message via iMessage
                 send "{safe_message}" to targetBuddy
