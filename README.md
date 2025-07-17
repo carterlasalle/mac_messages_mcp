@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/carterlasalle-mac-messages-mcp-badge.png)](https://mseep.ai/app/carterlasalle-mac-messages-mcp)
+
 # Mac Messages MCP
 
 A Python bridge for interacting with the macOS Messages app using MCP (Multiple Context Protocol). 
