@@ -30,11 +30,8 @@ logging.basicConfig(
 
 logger = logging.getLogger("mac_messages_mcp")
 
-# Initialize the MCP server with proper description
-mcp = FastMCP(
-    "MessageBridge", 
-    description="A bridge for interacting with macOS Messages app"
-)
+# Initialize the MCP server
+mcp = FastMCP("MessageBridge")
 
 @mcp.tool()
 def tool_get_recent_messages(ctx: Context, hours: int = 24, contact: str = None) -> str:
