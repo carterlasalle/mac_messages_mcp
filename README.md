@@ -101,6 +101,54 @@ uvx mac-messages-mcp
 
 ⚠️ Only run one instance of the MCP server (either on Cursor or Claude Desktop), not both
 
+### Docker Container Integration
+
+If you need to connect to `mac-messages-mcp` from a Docker container, you'll need to use the `mcp-proxy` package to bridge the stdio-based server to HTTP.
+
+#### Setup Instructions
+
+1. **Install mcp-proxy on your macOS host:**
+```bash
+npm install -g mcp-proxy
+```
+
+2. **Start the proxy server:**
+```bash
+# Using the published version
+npx mcp-proxy uvx mac-messages-mcp --port 8000 --host 0.0.0.0
+
+# Or using local development (if you encounter issues)
+npx mcp-proxy uv run python -m mac_messages_mcp.server --port 8000 --host 0.0.0.0
+```
+
+3. **Connect from Docker:**
+Your Docker container can now connect to:
+- URL: `http://host.docker.internal:8000/mcp` (on macOS/Windows)
+- URL: `http://<host-ip>:8000/mcp` (on Linux)
+
+4. **Docker Compose example:**
+```yaml
+version: '3.8'
+services:
+  your-app:
+    image: your-image
+    environment:
+      MCP_MESSAGES_URL: "http://host.docker.internal:8000/mcp"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # For Linux hosts
+```
+
+5. **Running multiple MCP servers:**
+```bash
+# Terminal 1 - Messages MCP on port 8001
+npx mcp-proxy uvx mac-messages-mcp --port 8001 --host 0.0.0.0
+
+# Terminal 2 - Another MCP server on port 8002
+npx mcp-proxy uvx another-mcp-server --port 8002 --host 0.0.0.0
+```
+
+**Note:** Binding to `0.0.0.0` exposes the service to all network interfaces. In production, consider using more restrictive host bindings and adding authentication.
+
 
 ### Option 1: Install from PyPI
 
