@@ -3,9 +3,10 @@
 Mac Messages MCP - Entry point fixed for proper MCP protocol implementation
 """
 
-import asyncio
 import logging
 import sys
+from dotenv import load_dotenv
+import os
 
 from mcp.server.fastmcp import Context, FastMCP
 
@@ -21,23 +22,60 @@ from mac_messages_mcp.messages import (
     send_message,
 )
 
+
+load_dotenv(".env.local")
+
+# Toggle write tools via env while keeping the same variable name
+WRITE_TOOLS_ENABLED = (
+    os.getenv("MAC_MESSAGES_MCP_WRITE_TOOLS_ENABLED", "false").strip().lower() == "true"
+)
+
+
+class FastMCPWithOptionalWrites(FastMCP):
+
+    def write_tool(self):
+        """Decorator factory for tools that perform write operations.
+
+        - When WRITE_TOOLS_ENABLED is true: register tool normally (enabled).
+        - When false: register a stub that returns a consistent disabled message.
+        """
+        if self.write_tools_enabled:
+            return super().tool()
+        else:
+            return self._disabled_tool()
+
+    @property
+    def write_tools_enabled(self) -> bool:
+        return WRITE_TOOLS_ENABLED
+
+    def _disabled_tool(self):
+        def decorator(func):
+            def wrapper(*args, **kwargs):
+                return {"success": False, "message": "Write operations are disabled."}
+
+            return wrapper
+
+        return decorator
+
+
 # Configure logging to stderr for debugging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    stream=sys.stderr
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    stream=sys.stderr,
 )
 
 logger = logging.getLogger("mac_messages_mcp")
 
 # Initialize the MCP server
-mcp = FastMCP("MessageBridge")
+mcp = FastMCPWithOptionalWrites("MessageBridge")
+
 
 @mcp.tool()
 def tool_get_recent_messages(ctx: Context, hours: int = 24, contact: str = None) -> str:
     """
     Get recent messages from the Messages app.
-    
+
     Args:
         hours: Number of hours to look back (default: 24)
         contact: Filter by contact name, phone number, or email (optional)
@@ -54,11 +92,14 @@ def tool_get_recent_messages(ctx: Context, hours: int = 24, contact: str = None)
         logger.error(f"Error in get_recent_messages: {str(e)}")
         return f"Error getting messages: {str(e)}"
 
-@mcp.tool()
-def tool_send_message(ctx: Context, recipient: str, message: str, group_chat: bool = False) -> str:
+
+@mcp.write_tool()
+def tool_send_message(
+    ctx: Context, recipient: str, message: str, group_chat: bool = False
+) -> str:
     """
     Send a message using the Messages app.
-    
+
     Args:
         recipient: Phone number, email, contact name, or "contact:N" to select from matches
                   For example, "contact:1" selects the first contact from a previous search
@@ -69,27 +110,30 @@ def tool_send_message(ctx: Context, recipient: str, message: str, group_chat: bo
     try:
         # Ensure recipient is a string (handles numbers properly)
         recipient = str(recipient)
-        result = send_message(recipient=recipient, message=message, group_chat=group_chat)
+        result = send_message(
+            recipient=recipient, message=message, group_chat=group_chat
+        )
         return result
     except Exception as e:
         logger.error(f"Error in send_message: {str(e)}")
         return f"Error sending message: {str(e)}"
 
+
 @mcp.tool()
 def tool_find_contact(ctx: Context, name: str) -> str:
     """
     Find a contact by name using fuzzy matching.
-    
+
     Args:
         name: The name to search for
     """
     logger.info(f"Finding contact: {name}")
     try:
         matches = find_contact_by_name(name)
-        
+
         if not matches:
             return f"No contacts found matching '{name}'."
-        
+
         if len(matches) == 1:
             contact = matches[0]
             return f"Found contact: {contact['name']} ({contact['phone']}) with confidence {contact['score']:.2f}"
@@ -97,15 +141,18 @@ def tool_find_contact(ctx: Context, name: str) -> str:
             # Format multiple matches
             result = [f"Found {len(matches)} contacts matching '{name}':"]
             for i, contact in enumerate(matches[:10]):  # Limit to top 10
-                result.append(f"{i+1}. {contact['name']} ({contact['phone']}) - confidence {contact['score']:.2f}")
-            
+                result.append(
+                    f"{i+1}. {contact['name']} ({contact['phone']}) - confidence {contact['score']:.2f}"
+                )
+
             if len(matches) > 10:
                 result.append(f"...and {len(matches) - 10} more.")
-            
+
             return "\n".join(result)
     except Exception as e:
         logger.error(f"Error in find_contact: {str(e)}")
         return f"Error finding contact: {str(e)}"
+
 
 @mcp.tool()
 def tool_check_db_access(ctx: Context) -> str:
@@ -119,6 +166,7 @@ def tool_check_db_access(ctx: Context) -> str:
         logger.error(f"Error checking database access: {str(e)}")
         return f"Error checking database access: {str(e)}"
 
+
 @mcp.tool()
 def tool_check_contacts(ctx: Context) -> str:
     """
@@ -129,21 +177,22 @@ def tool_check_contacts(ctx: Context) -> str:
         contacts = get_cached_contacts()
         if not contacts:
             return "No contacts found in AddressBook."
-        
+
         contact_count = len(contacts)
         sample_entries = list(contacts.items())[:10]  # Show first 10 contacts
         formatted_samples = [f"{number} -> {name}" for number, name in sample_entries]
-        
+
         result = [
             f"Found {contact_count} contacts in AddressBook.",
             "Sample entries (first 10):",
-            *formatted_samples
+            *formatted_samples,
         ]
-        
+
         return "\n".join(result)
     except Exception as e:
         logger.error(f"Error checking contacts: {str(e)}")
         return f"Error checking contacts: {str(e)}"
+
 
 @mcp.tool()
 def tool_check_addressbook(ctx: Context) -> str:
@@ -157,6 +206,7 @@ def tool_check_addressbook(ctx: Context) -> str:
         logger.error(f"Error checking AddressBook: {str(e)}")
         return f"Error checking AddressBook: {str(e)}"
 
+
 @mcp.tool()
 def tool_get_chats(ctx: Context) -> str:
     """
@@ -166,23 +216,25 @@ def tool_get_chats(ctx: Context) -> str:
     try:
         query = "SELECT chat_identifier, display_name FROM chat WHERE display_name IS NOT NULL"
         results = query_messages_db(query)
-        
+
         if not results:
             return "No group chats found."
-        
+
         if "error" in results[0]:
             return f"Error accessing chats: {results[0]['error']}"
-        
+
         # Filter out chats without display names and format the results
-        chats = [r for r in results if r.get('display_name')]
-        
+        chats = [r for r in results if r.get("display_name")]
+
         if not chats:
             return "No named group chats found."
-        
+
         formatted_chats = []
         for i, chat in enumerate(chats, 1):
-            formatted_chats.append(f"{i}. {chat['display_name']} (ID: {chat['chat_identifier']})")
-        
+            formatted_chats.append(
+                f"{i}. {chat['display_name']} (ID: {chat['chat_identifier']})"
+            )
+
         return "Available group chats:\n" + "\n".join(formatted_chats)
     except Exception as e:
         logger.error(f"Error getting chats: {str(e)}")
@@ -193,10 +245,10 @@ def tool_get_chats(ctx: Context) -> str:
 def tool_check_imessage_availability(ctx: Context, recipient: str) -> str:
     """
     Check if a recipient has iMessage available.
-    
+
     This tool helps determine whether to send via iMessage or SMS/RCS.
     Useful for debugging delivery issues or choosing the right service.
-    
+
     Args:
         recipient: Phone number or email to check for iMessage availability
     """
@@ -204,7 +256,7 @@ def tool_check_imessage_availability(ctx: Context, recipient: str) -> str:
     try:
         recipient = str(recipient)
         has_imessage = _check_imessage_availability(recipient)
-        
+
         if has_imessage:
             return f"✅ {recipient} has iMessage available - messages will be sent via iMessage"
         else:
@@ -216,6 +268,7 @@ def tool_check_imessage_availability(ctx: Context, recipient: str) -> str:
     except Exception as e:
         logger.error(f"Error checking iMessage availability: {str(e)}")
         return f"Error checking iMessage availability: {str(e)}"
+
 
 @mcp.tool()
 def tool_fuzzy_search_messages(
@@ -253,10 +306,12 @@ def get_recent_messages_resource(hours: int = 24) -> str:
     """Resource that provides recent messages."""
     return get_recent_messages(hours=hours)
 
+
 @mcp.resource("messages://contact/{contact}/{hours}")
 def get_contact_messages_resource(contact: str, hours: int = 24) -> str:
     """Resource that provides messages from a specific contact."""
     return get_recent_messages(hours=hours, contact=contact)
+
 
 def run_server():
     """Run the MCP server with proper error handling"""
@@ -266,6 +321,7 @@ def run_server():
     except Exception as e:
         logger.error(f"Failed to start server: {str(e)}")
         sys.exit(1)
+
 
 if __name__ == "__main__":
     run_server()
