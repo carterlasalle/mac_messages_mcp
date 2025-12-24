@@ -41,6 +41,117 @@ def get_chat_mapping() -> Dict[str, str]:
 
     return mapping
 
+
+# Global cache for group chats
+_GROUP_CHATS_CACHE: Optional[List[Dict[str, Any]]] = None
+_GROUP_CHATS_CACHE_TIME = 0
+_GROUP_CHATS_CACHE_TTL = 300  # 5 minutes
+
+
+def get_group_chats() -> List[Dict[str, Any]]:
+    """
+    Get all group chats from the Messages database.
+
+    Returns a list of dicts with:
+    - rowid: The chat's ROWID
+    - room_name: The room identifier (used in cache_roomnames)
+    - display_name: Human-readable name (may be None)
+    - chat_identifier: Alternative identifier
+    """
+    global _GROUP_CHATS_CACHE, _GROUP_CHATS_CACHE_TIME
+
+    current_time = time.time()
+    if _GROUP_CHATS_CACHE is not None and (current_time - _GROUP_CHATS_CACHE_TIME) < _GROUP_CHATS_CACHE_TTL:
+        return _GROUP_CHATS_CACHE
+
+    try:
+        db_path = get_messages_db_path()
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            # Query for group chats (those with room_name set)
+            cursor.execute("""
+                SELECT
+                    ROWID as rowid,
+                    room_name,
+                    display_name,
+                    chat_identifier
+                FROM chat
+                WHERE room_name IS NOT NULL AND room_name != ''
+                ORDER BY display_name, room_name
+            """)
+
+            results = [dict(row) for row in cursor.fetchall()]
+
+        _GROUP_CHATS_CACHE = results
+        _GROUP_CHATS_CACHE_TIME = current_time
+        return results
+    except Exception as e:
+        print(f"Error getting group chats: {str(e)}")
+        return []
+
+
+def find_group_chat_by_name(name: str) -> List[Dict[str, Any]]:
+    """
+    Find group chats by name using fuzzy matching.
+
+    Searches against:
+    - display_name (human-readable group name)
+    - chat_identifier (fallback for unnamed chats)
+
+    Args:
+        name: The group chat name to search for
+
+    Returns:
+        List of matching group chats with scores
+    """
+    chats = get_group_chats()
+
+    # First, try exact match on room_name or chat_identifier (for ID lookups)
+    for chat in chats:
+        if chat.get('room_name') == name or chat.get('chat_identifier') == name:
+            return [{
+                "name": chat.get('display_name') or chat.get('room_name') or chat.get('chat_identifier'),
+                "room_name": chat.get('room_name'),
+                "chat_id": chat.get('rowid'),
+                "score": 1.0
+            }]
+
+    # Build candidates for fuzzy matching
+    candidates = []
+    for chat in chats:
+        display_name = chat.get('display_name')
+        room_name = chat.get('room_name')
+        chat_identifier = chat.get('chat_identifier')
+
+        # Add display_name as primary searchable (if exists)
+        if display_name:
+            candidates.append((display_name, chat))
+        # Add chat_identifier as fallback (for unnamed chats)
+        elif chat_identifier:
+            candidates.append((chat_identifier, chat))
+
+    # Perform fuzzy matching
+    matches = fuzzy_match(name, candidates)
+
+    # Deduplicate by room_name, keeping highest score
+    seen_rooms = {}
+    for matched_name, chat, score in matches:
+        room_name = chat.get('room_name')
+        if room_name not in seen_rooms or score > seen_rooms[room_name]["score"]:
+            seen_rooms[room_name] = {
+                "name": chat.get('display_name') or chat.get('room_name') or chat.get('chat_identifier'),
+                "room_name": room_name,
+                "chat_id": chat.get('rowid'),
+                "score": score
+            }
+
+    # Convert to sorted list
+    results = sorted(seen_rooms.values(), key=lambda x: x["score"], reverse=True)
+    return results
+
+
 def extract_body_from_attributed(attributed_body):
     """
     Extract message content from attributedBody binary data
@@ -642,33 +753,63 @@ def get_contact_name(handle_id: int) -> str:
 def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
     """
     Get recent messages from the Messages app using attributedBody for content.
-    
+
     Args:
         hours: Number of hours to look back (default: 24)
-        contact: Filter by contact name, phone number, or email (optional)
+        contact: Filter by contact name, phone number, email, or group chat name (optional)
                 Use "contact:N" to select a specific contact from previous matches
-    
+                Use "group:N" to select a specific group chat from previous matches
+
     Returns:
         Formatted string with recent messages
     """
     # Input validation
     if hours < 0:
         return "Error: Hours cannot be negative. Please provide a positive number."
-    
+
     # Prevent integer overflow - limit to reasonable maximum (10 years)
     MAX_HOURS = 10 * 365 * 24  # 87,600 hours
     if hours > MAX_HOURS:
         return f"Error: Hours value too large. Maximum allowed is {MAX_HOURS} hours (10 years)."
-    
+
     handle_id = None
-    
+    chat_room_name = None  # For group chat filtering
+
     # If contact is specified, try to resolve it
     if contact:
         # Convert to string to ensure phone numbers work properly
         contact = str(contact).strip()
-        
+
+        # Handle group chat selection format (group:N)
+        if contact.lower().startswith("group:"):
+            try:
+                group_parts = contact.split(":", 1)
+                if len(group_parts) < 2 or not group_parts[1].strip():
+                    return "Error: Invalid group selection format. Use 'group:N' where N is a positive number."
+
+                try:
+                    index = int(group_parts[1].strip()) - 1
+                except ValueError:
+                    return "Error: Group selection must be a number. Use 'group:N' where N is a positive number."
+
+                if index < 0:
+                    return "Error: Group selection must be a positive number (starting from 1)."
+
+                if not hasattr(get_recent_messages, "recent_group_matches") or not get_recent_messages.recent_group_matches:
+                    return "No recent group chat matches available. Please search for a group chat first."
+
+                if index >= len(get_recent_messages.recent_group_matches):
+                    return f"Invalid selection. Please choose a number between 1 and {len(get_recent_messages.recent_group_matches)}."
+
+                # Get the selected group chat's room_name
+                chat_room_name = get_recent_messages.recent_group_matches[index]['room_name']
+                # Clear contact so we don't fall into name-matching below
+                contact = None
+            except Exception as e:
+                return f"Error processing group selection: {str(e)}"
+
         # Handle contact selection format (contact:N)
-        if contact.lower().startswith("contact:"):
+        elif contact.lower().startswith("contact:"):
             try:
                 # Extract the number after the colon
                 contact_parts = contact.split(":", 1)
@@ -698,53 +839,85 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
                 return f"Error processing contact selection: {str(e)}"
         
         # Check if contact might be a name rather than a phone number or email
-        if not all(c.isdigit() or c in '+- ()@.' for c in contact):
-            # Try fuzzy matching
-            matches = find_contact_by_name(contact)
-            
-            if not matches:
-                return f"No contacts found matching '{contact}'."
-            
-            if len(matches) == 1:
-                # Single match, use its phone number
-                contact = matches[0]['phone']
+        if contact and not chat_room_name and not all(c.isdigit() or c in '+- ()@.' for c in contact):
+            # First, try group chat matching
+            group_matches = find_group_chat_by_name(contact)
+
+            if group_matches:
+                if len(group_matches) == 1:
+                    # Single group chat match
+                    chat_room_name = group_matches[0]['room_name']
+                else:
+                    # Multiple group chat matches - also check for contact matches
+                    contact_matches = find_contact_by_name(contact)
+
+                    if contact_matches:
+                        # Both group chats and contacts match - disambiguate
+                        get_recent_messages.recent_group_matches = group_matches
+                        get_recent_messages.recent_matches = contact_matches
+
+                        result_lines = [f"Found matches for '{contact}' in both group chats and contacts:\n"]
+                        result_lines.append("Group chats:")
+                        for i, g in enumerate(group_matches[:5]):
+                            result_lines.append(f"  {i+1}. {g['name']} (use 'group:{i+1}')")
+                        result_lines.append("\nContacts:")
+                        for i, c in enumerate(contact_matches[:5]):
+                            result_lines.append(f"  {i+1}. {c['name']} ({c['phone']}) (use 'contact:{i+1}')")
+                        return "\n".join(result_lines)
+                    else:
+                        # Only group chat matches - clear stale contact matches
+                        get_recent_messages.recent_group_matches = group_matches
+                        get_recent_messages.recent_matches = []
+                        group_list = "\n".join([f"{i+1}. {g['name']}" for i, g in enumerate(group_matches[:10])])
+                        return f"Multiple group chats found matching '{contact}'. Please specify which one using 'group:N' where N is the number:\n{group_list}"
             else:
-                # Store the matches for later selection
-                get_recent_messages.recent_matches = matches
-                
-                # Multiple matches, return them all
-                contact_list = "\n".join([f"{i+1}. {c['name']} ({c['phone']})" for i, c in enumerate(matches[:10])])
-                return f"Multiple contacts found matching '{contact}'. Please specify which one using 'contact:N' where N is the number:\n{contact_list}"
-        
-        # At this point, contact should be a phone number or email
-        # Try to find handle_id with improved phone number matching
-        if '@' in contact:
-            # This is an email
-            query = "SELECT ROWID FROM handle WHERE id = ?"
-            results = query_messages_db(query, (contact,))
-            if results and not "error" in results[0] and len(results) > 0:
-                handle_id = results[0]["ROWID"]
-        else:
-            # This is a phone number - try various formats
-            handle_id = find_handle_by_phone(contact)
-            
-        if not handle_id:
-            # Try a direct search in message table to see if any messages exist
-            normalized = normalize_phone_number(contact)
-            query = """
-            SELECT COUNT(*) as count 
-            FROM message m
-            JOIN handle h ON m.handle_id = h.ROWID
-            WHERE h.id LIKE ?
-            """
-            results = query_messages_db(query, (f"%{normalized}%",))
-            
-            if results and not "error" in results[0] and results[0].get("count", 0) == 0:
-                # No messages found but the query was valid
-                return f"No message history found with '{contact}'."
+                # No group chat match, try contact matching
+                matches = find_contact_by_name(contact)
+
+                if not matches:
+                    return f"No contacts or group chats found matching '{contact}'."
+
+                if len(matches) == 1:
+                    # Single match, use its phone number
+                    contact = matches[0]['phone']
+                else:
+                    # Store the matches for later selection
+                    get_recent_messages.recent_matches = matches
+
+                    # Multiple matches, return them all
+                    contact_list = "\n".join([f"{i+1}. {c['name']} ({c['phone']})" for i, c in enumerate(matches[:10])])
+                    return f"Multiple contacts found matching '{contact}'. Please specify which one using 'contact:N' where N is the number:\n{contact_list}"
+
+        # At this point, contact should be a phone number or email (if not already resolved to group chat)
+        if not chat_room_name:
+            # Try to find handle_id with improved phone number matching
+            if '@' in contact:
+                # This is an email
+                query = "SELECT ROWID FROM handle WHERE id = ?"
+                results = query_messages_db(query, (contact,))
+                if results and not "error" in results[0] and len(results) > 0:
+                    handle_id = results[0]["ROWID"]
             else:
-                # Could not find the handle at all
-                return f"Could not find any messages with contact '{contact}'. Verify the phone number or email is correct."
+                # This is a phone number - try various formats
+                handle_id = find_handle_by_phone(contact)
+
+            if not handle_id:
+                # Try a direct search in message table to see if any messages exist
+                normalized = normalize_phone_number(contact)
+                query = """
+                SELECT COUNT(*) as count
+                FROM message m
+                JOIN handle h ON m.handle_id = h.ROWID
+                WHERE h.id LIKE ?
+                """
+                results = query_messages_db(query, (f"%{normalized}%",))
+
+                if results and not "error" in results[0] and results[0].get("count", 0) == 0:
+                    # No messages found but the query was valid
+                    return f"No message history found with '{contact}'."
+                else:
+                    # Could not find the handle at all
+                    return f"Could not find any messages with contact '{contact}'. Verify the phone number or email is correct."
     
     # Calculate the timestamp for X hours ago
     current_time = datetime.now(timezone.utc)
@@ -763,29 +936,69 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
     timestamp_str = str(nanoseconds_since_apple_epoch)
     
     # Build the SQL query - use attributedBody field and text
-    query = """
-    SELECT 
-        m.ROWID,
-        m.date, 
-        m.text, 
-        m.attributedBody,
-        m.is_from_me,
-        m.handle_id,
-        m.cache_roomnames
-    FROM 
-        message m
-    WHERE 
-        CAST(m.date AS TEXT) > ? 
-    """
-    
-    params = (timestamp_str,)
-    
-    # Add contact filter if handle_id was found
-    if handle_id:
-        query += "AND m.handle_id = ? "
+    if chat_room_name:
+        # For group chats, use chat_message_join for reliable filtering
+        # Include c.display_name directly for reliable group chat name display
+        query = """
+        SELECT
+            m.ROWID,
+            m.date,
+            m.text,
+            m.attributedBody,
+            m.is_from_me,
+            m.handle_id,
+            m.cache_roomnames,
+            c.display_name as chat_display_name
+        FROM
+            message m
+            JOIN chat_message_join cmj ON m.ROWID = cmj.message_id
+            JOIN chat c ON cmj.chat_id = c.ROWID
+        WHERE
+            CAST(m.date AS TEXT) > ?
+            AND c.room_name = ?
+        ORDER BY m.date DESC
+        LIMIT 100
+        """
+        params = (timestamp_str, chat_room_name)
+    elif handle_id:
+        # For individual contacts, filter by handle_id
+        query = """
+        SELECT
+            m.ROWID,
+            m.date,
+            m.text,
+            m.attributedBody,
+            m.is_from_me,
+            m.handle_id,
+            m.cache_roomnames
+        FROM
+            message m
+        WHERE
+            CAST(m.date AS TEXT) > ?
+            AND m.handle_id = ?
+        ORDER BY m.date DESC
+        LIMIT 100
+        """
         params = (timestamp_str, handle_id)
-    
-    query += "ORDER BY m.date DESC LIMIT 100"
+    else:
+        # No filter, get all recent messages
+        query = """
+        SELECT
+            m.ROWID,
+            m.date,
+            m.text,
+            m.attributedBody,
+            m.is_from_me,
+            m.handle_id,
+            m.cache_roomnames
+        FROM
+            message m
+        WHERE
+            CAST(m.date AS TEXT) > ?
+        ORDER BY m.date DESC
+        LIMIT 100
+        """
+        params = (timestamp_str,)
     
     # Execute the query
     messages = query_messages_db(query, params)
@@ -835,12 +1048,13 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
             print(f"Date conversion error: {e} for timestamp {msg['date']}")
         
         direction = "You" if msg["is_from_me"] else get_contact_name(msg["handle_id"])
-        
+
         # Check if this is a group chat
-        group_chat_name = None
-        if msg.get('cache_roomnames'):
+        # Prefer chat_display_name from join (for group chat queries), fall back to cache_roomnames lookup
+        group_chat_name = msg.get('chat_display_name')
+        if not group_chat_name and msg.get('cache_roomnames'):
             group_chat_name = chat_mapping.get(msg['cache_roomnames'])
-        
+
         message_prefix = f"[{date_str}]"
         if group_chat_name:
             message_prefix += f" [{group_chat_name}]"
@@ -854,8 +1068,9 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
         
     return "\n".join(formatted_messages)
 
-# Initialize the static variable for recent matches
+# Initialize the static variables for recent matches
 get_recent_messages.recent_matches = []
+get_recent_messages.recent_group_matches = []
 
 
 def fuzzy_search_messages(
