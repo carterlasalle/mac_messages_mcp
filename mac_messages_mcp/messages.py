@@ -142,40 +142,66 @@ def clean_name(name: str) -> str:
 
 def fuzzy_match(query: str, candidates: List[Tuple[str, Any]], threshold: float = 0.6) -> List[Tuple[str, Any, float]]:
     """
-    Find fuzzy matches between query and a list of candidates.
-    
+    Find fuzzy matches between query and a list of candidates using token-based matching.
+
+    Uses token-based matching to properly handle first name searches:
+    - Exact token match (e.g., "alex" matches first name "Alex") scores 0.95
+    - Query as prefix of token scores 0.85
+    - Token as prefix of query scores 0.80
+    - Fuzzy match on individual tokens uses best token score
+
     Args:
         query: The search string
         candidates: List of (name, value) tuples to search through
         threshold: Minimum similarity score (0-1) to consider a match
-        
+
     Returns:
         List of (name, value, score) tuples for matches, sorted by score
     """
     query = clean_name(query).lower()
+    if not query:
+        return []
+
     results = []
-    
+
     for name, value in candidates:
         clean_candidate = clean_name(name).lower()
-        
-        # Try exact match first (case insensitive)
+
+        # Try exact full match first (case insensitive)
         if query == clean_candidate:
             results.append((name, value, 1.0))
             continue
-            
-        # Check if query is a substring of the candidate
-        if query in clean_candidate:
-            # Longer substring matches get higher scores
-            score = len(query) / len(clean_candidate) * 0.9  # max 0.9 for substring
-            if score >= threshold:
-                results.append((name, value, score))
-                continue
-                
-        # Otherwise use difflib for fuzzy matching
-        score = difflib.SequenceMatcher(None, query, clean_candidate).ratio()
-        if score >= threshold:
-            results.append((name, value, score))
-    
+
+        # Token-based matching: split candidate into words/tokens
+        tokens = clean_candidate.split()
+        best_token_score = 0.0
+
+        for token in tokens:
+            # Exact token match (e.g., query "alex" matches token "alex")
+            if query == token:
+                best_token_score = max(best_token_score, 0.95)
+            # Query is prefix of token (e.g., "ale" matches "alex")
+            elif token.startswith(query):
+                # Score based on how much of the token is matched
+                prefix_score = 0.85 * (len(query) / len(token))
+                best_token_score = max(best_token_score, prefix_score)
+            # Token is prefix of query (e.g., "alex" when searching "alexis")
+            elif query.startswith(token):
+                prefix_score = 0.80 * (len(token) / len(query))
+                best_token_score = max(best_token_score, prefix_score)
+            else:
+                # Fuzzy match on individual token
+                token_score = difflib.SequenceMatcher(None, query, token).ratio()
+                best_token_score = max(best_token_score, token_score)
+
+        # Also try matching query against full name for multi-word queries
+        if ' ' in query or best_token_score < threshold:
+            full_score = difflib.SequenceMatcher(None, query, clean_candidate).ratio()
+            best_token_score = max(best_token_score, full_score)
+
+        if best_token_score >= threshold:
+            results.append((name, value, best_token_score))
+
     # Sort results by score (highest first)
     return sorted(results, key=lambda x: x[2], reverse=True)
 
@@ -220,11 +246,12 @@ def get_addressbook_contacts() -> Dict[str, str]:
     """
     contacts_map = {}
     
-    # Define the query to get contact names and phone numbers
+    # Define the query to get contact names, nicknames, and phone numbers
     query = """
-    SELECT 
+    SELECT
         ZABCDRECORD.ZFIRSTNAME as first_name,
         ZABCDRECORD.ZLASTNAME as last_name,
+        ZABCDRECORD.ZNICKNAME as nickname,
         ZABCDPHONENUMBER.ZFULLNUMBER as phone
     FROM
         ZABCDRECORD
@@ -263,31 +290,41 @@ def process_contacts(contacts) -> Dict[str, str]:
     """Process contact records into a normalized phone -> name map"""
     contacts_map = {}
     name_to_numbers = {}  # For reverse lookup
-    
+    phone_to_details = {}  # Store first_name, last_name, nickname for fuzzy matching
+
     for contact in contacts:
         try:
-            first_name = contact.get("first_name", "")
-            last_name = contact.get("last_name", "")
+            first_name = contact.get("first_name", "") or ""
+            last_name = contact.get("last_name", "") or ""
+            nickname = contact.get("nickname", "") or ""
             phone = contact.get("phone", "")
-            
+
             # Skip entries without phone numbers
             if not phone:
                 continue
-            
+
             # Clean up phone number and remove any image metadata
             if "X-IMAGETYPE" in phone:
                 phone = phone.split("X-IMAGETYPE")[0]
-            
+
             # Create full name
             full_name = " ".join(filter(None, [first_name, last_name]))
             if not full_name.strip():
                 continue
-            
+
             # Normalize phone number and add to map
             normalized_phone = normalize_phone_number(phone)
             if normalized_phone:
                 contacts_map[normalized_phone] = full_name
-                
+
+                # Store detailed info for fuzzy matching
+                phone_to_details[normalized_phone] = {
+                    "first_name": first_name.strip(),
+                    "last_name": last_name.strip(),
+                    "nickname": nickname.strip(),
+                    "full_name": full_name
+                }
+
                 # Add to reverse lookup
                 if full_name not in name_to_numbers:
                     name_to_numbers[full_name] = []
@@ -296,11 +333,12 @@ def process_contacts(contacts) -> Dict[str, str]:
             # Skip individual entries that fail to process
             print(f"Error processing contact: {str(e)}")
             continue
-    
+
     # Store the reverse lookup in a global variable for later use
-    global _NAME_TO_NUMBERS_MAP
+    global _NAME_TO_NUMBERS_MAP, _PHONE_TO_DETAILS_MAP
     _NAME_TO_NUMBERS_MAP = name_to_numbers
-    
+    _PHONE_TO_DETAILS_MAP = phone_to_details
+
     return contacts_map
 
 def get_addressbook_contacts_subprocess() -> Dict[str, str]:
@@ -369,8 +407,9 @@ def get_addressbook_contacts_subprocess() -> Dict[str, str]:
     
     return contacts_map
 
-# Global variable for reverse contact lookup
+# Global variables for contact lookup
 _NAME_TO_NUMBERS_MAP = {}
+_PHONE_TO_DETAILS_MAP = {}  # phone -> {first_name, last_name, nickname, full_name}
 
 def get_cached_contacts() -> Dict[str, str]:
     """Get cached contacts map or refresh if needed"""
@@ -385,31 +424,51 @@ def get_cached_contacts() -> Dict[str, str]:
 
 def find_contact_by_name(name: str) -> List[Dict[str, Any]]:
     """
-    Find contacts by name using fuzzy matching.
-    
+    Find contacts by name or nickname using fuzzy matching.
+
+    Searches against:
+    - Full name (first + last)
+    - Nickname
+
     Args:
-        name: The name to search for
-    
+        name: The name or nickname to search for
+
     Returns:
         List of matching contacts (may be multiple if ambiguous)
     """
     contacts = get_cached_contacts()
-    
-    # Build a list of (name, phone) pairs to search through
-    candidates = [(contact_name, phone) for phone, contact_name in contacts.items()]
-    
+    global _PHONE_TO_DETAILS_MAP
+
+    # Build candidates: search both full name and nickname
+    candidates = []
+    for phone, contact_name in contacts.items():
+        # Add full name as searchable
+        candidates.append((contact_name, phone))
+
+        # Add nickname as searchable (if exists)
+        details = _PHONE_TO_DETAILS_MAP.get(phone, {})
+        nickname = details.get("nickname", "")
+        if nickname:
+            candidates.append((nickname, phone))
+
     # Perform fuzzy matching
     matches = fuzzy_match(name, candidates)
-    
-    # Convert to a list of contact dictionaries
-    results = []
-    for contact_name, phone, score in matches:
-        results.append({
-            "name": contact_name,
-            "phone": phone,
-            "score": score
-        })
-    
+
+    # Deduplicate by phone number, keeping highest score for each
+    seen_phones = {}
+    for matched_name, phone, score in matches:
+        if phone not in seen_phones or score > seen_phones[phone]["score"]:
+            # Get the display name (full name, not nickname)
+            display_name = contacts.get(phone, matched_name)
+            seen_phones[phone] = {
+                "name": display_name,
+                "phone": phone,
+                "score": score,
+                "matched_on": matched_name  # What actually matched (name or nickname)
+            }
+
+    # Convert to sorted list
+    results = sorted(seen_phones.values(), key=lambda x: x["score"], reverse=True)
     return results
 
 def send_message(recipient: str, message: str, group_chat: bool = False) -> str:
