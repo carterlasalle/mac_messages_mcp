@@ -708,7 +708,8 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
                 return f"Error processing contact selection: {str(e)}"
         
         # Check if contact might be a name rather than a phone number or email
-        if all(not (c.isdigit() or c in '+-()@.') for c in contact):
+        # If any character is NOT a phone/email character, treat as a name
+        if not all(c.isdigit() or c in '+- ()@.' for c in contact):
             # Try fuzzy matching
             matches = find_contact_by_name(contact)
             
@@ -1065,7 +1066,7 @@ def _check_imessage_availability(recipient: str) -> bool:
         text_count = row.get('text_count', 0)
         num_errors = row.get('errors', 0)
 
-        # Makes sure that any iMessages accidentally sent don't count
+        # Only count as iMessage available if there were successful messages (errors < total)
         if num_errors < text_count:
             if service_type in ('iMessage', 'iMessageLite'):
                 return True
