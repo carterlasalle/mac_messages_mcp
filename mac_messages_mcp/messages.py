@@ -142,40 +142,66 @@ def clean_name(name: str) -> str:
 
 def fuzzy_match(query: str, candidates: List[Tuple[str, Any]], threshold: float = 0.6) -> List[Tuple[str, Any, float]]:
     """
-    Find fuzzy matches between query and a list of candidates.
-    
+    Find fuzzy matches between query and a list of candidates using token-based matching.
+
+    Uses token-based matching to properly handle first name searches:
+    - Exact token match (e.g., "alex" matches first name "Alex") scores 0.95
+    - Query as prefix of token scores 0.85
+    - Token as prefix of query scores 0.80
+    - Fuzzy match on individual tokens uses best token score
+
     Args:
         query: The search string
         candidates: List of (name, value) tuples to search through
         threshold: Minimum similarity score (0-1) to consider a match
-        
+
     Returns:
         List of (name, value, score) tuples for matches, sorted by score
     """
     query = clean_name(query).lower()
+    if not query:
+        return []
+
     results = []
-    
+
     for name, value in candidates:
         clean_candidate = clean_name(name).lower()
-        
-        # Try exact match first (case insensitive)
+
+        # Try exact full match first (case insensitive)
         if query == clean_candidate:
             results.append((name, value, 1.0))
             continue
-            
-        # Check if query is a substring of the candidate
-        if query in clean_candidate:
-            # Longer substring matches get higher scores
-            score = len(query) / len(clean_candidate) * 0.9  # max 0.9 for substring
-            if score >= threshold:
-                results.append((name, value, score))
-                continue
-                
-        # Otherwise use difflib for fuzzy matching
-        score = difflib.SequenceMatcher(None, query, clean_candidate).ratio()
-        if score >= threshold:
-            results.append((name, value, score))
-    
+
+        # Token-based matching: split candidate into words/tokens
+        tokens = clean_candidate.split()
+        best_token_score = 0.0
+
+        for token in tokens:
+            # Exact token match (e.g., query "alex" matches token "alex")
+            if query == token:
+                best_token_score = max(best_token_score, 0.95)
+            # Query is prefix of token (e.g., "ale" matches "alex")
+            elif token.startswith(query):
+                # Score based on how much of the token is matched
+                prefix_score = 0.85 * (len(query) / len(token))
+                best_token_score = max(best_token_score, prefix_score)
+            # Token is prefix of query (e.g., "alex" when searching "alexis")
+            elif query.startswith(token):
+                prefix_score = 0.80 * (len(token) / len(query))
+                best_token_score = max(best_token_score, prefix_score)
+            else:
+                # Fuzzy match on individual token
+                token_score = difflib.SequenceMatcher(None, query, token).ratio()
+                best_token_score = max(best_token_score, token_score)
+
+        # Also try matching query against full name for multi-word queries
+        if ' ' in query or best_token_score < threshold:
+            full_score = difflib.SequenceMatcher(None, query, clean_candidate).ratio()
+            best_token_score = max(best_token_score, full_score)
+
+        if best_token_score >= threshold:
+            results.append((name, value, best_token_score))
+
     # Sort results by score (highest first)
     return sorted(results, key=lambda x: x[2], reverse=True)
 
@@ -220,11 +246,12 @@ def get_addressbook_contacts() -> Dict[str, str]:
     """
     contacts_map = {}
     
-    # Define the query to get contact names and phone numbers
+    # Define the query to get contact names, nicknames, and phone numbers
     query = """
-    SELECT 
+    SELECT
         ZABCDRECORD.ZFIRSTNAME as first_name,
         ZABCDRECORD.ZLASTNAME as last_name,
+        ZABCDRECORD.ZNICKNAME as nickname,
         ZABCDPHONENUMBER.ZFULLNUMBER as phone
     FROM
         ZABCDRECORD
@@ -263,31 +290,41 @@ def process_contacts(contacts) -> Dict[str, str]:
     """Process contact records into a normalized phone -> name map"""
     contacts_map = {}
     name_to_numbers = {}  # For reverse lookup
-    
+    phone_to_details = {}  # Store first_name, last_name, nickname for fuzzy matching
+
     for contact in contacts:
         try:
-            first_name = contact.get("first_name", "")
-            last_name = contact.get("last_name", "")
+            first_name = contact.get("first_name", "") or ""
+            last_name = contact.get("last_name", "") or ""
+            nickname = contact.get("nickname", "") or ""
             phone = contact.get("phone", "")
-            
+
             # Skip entries without phone numbers
             if not phone:
                 continue
-            
+
             # Clean up phone number and remove any image metadata
             if "X-IMAGETYPE" in phone:
                 phone = phone.split("X-IMAGETYPE")[0]
-            
+
             # Create full name
             full_name = " ".join(filter(None, [first_name, last_name]))
             if not full_name.strip():
                 continue
-            
+
             # Normalize phone number and add to map
             normalized_phone = normalize_phone_number(phone)
             if normalized_phone:
                 contacts_map[normalized_phone] = full_name
-                
+
+                # Store detailed info for fuzzy matching
+                phone_to_details[normalized_phone] = {
+                    "first_name": first_name.strip(),
+                    "last_name": last_name.strip(),
+                    "nickname": nickname.strip(),
+                    "full_name": full_name
+                }
+
                 # Add to reverse lookup
                 if full_name not in name_to_numbers:
                     name_to_numbers[full_name] = []
@@ -296,11 +333,12 @@ def process_contacts(contacts) -> Dict[str, str]:
             # Skip individual entries that fail to process
             print(f"Error processing contact: {str(e)}")
             continue
-    
+
     # Store the reverse lookup in a global variable for later use
-    global _NAME_TO_NUMBERS_MAP
+    global _NAME_TO_NUMBERS_MAP, _PHONE_TO_DETAILS_MAP
     _NAME_TO_NUMBERS_MAP = name_to_numbers
-    
+    _PHONE_TO_DETAILS_MAP = phone_to_details
+
     return contacts_map
 
 def get_addressbook_contacts_subprocess() -> Dict[str, str]:
@@ -369,8 +407,9 @@ def get_addressbook_contacts_subprocess() -> Dict[str, str]:
     
     return contacts_map
 
-# Global variable for reverse contact lookup
+# Global variables for contact lookup
 _NAME_TO_NUMBERS_MAP = {}
+_PHONE_TO_DETAILS_MAP = {}  # phone -> {first_name, last_name, nickname, full_name}
 
 def get_cached_contacts() -> Dict[str, str]:
     """Get cached contacts map or refresh if needed"""
@@ -385,31 +424,51 @@ def get_cached_contacts() -> Dict[str, str]:
 
 def find_contact_by_name(name: str) -> List[Dict[str, Any]]:
     """
-    Find contacts by name using fuzzy matching.
-    
+    Find contacts by name or nickname using fuzzy matching.
+
+    Searches against:
+    - Full name (first + last)
+    - Nickname
+
     Args:
-        name: The name to search for
-    
+        name: The name or nickname to search for
+
     Returns:
         List of matching contacts (may be multiple if ambiguous)
     """
     contacts = get_cached_contacts()
-    
-    # Build a list of (name, phone) pairs to search through
-    candidates = [(contact_name, phone) for phone, contact_name in contacts.items()]
-    
+    global _PHONE_TO_DETAILS_MAP
+
+    # Build candidates: search both full name and nickname
+    candidates = []
+    for phone, contact_name in contacts.items():
+        # Add full name as searchable
+        candidates.append((contact_name, phone))
+
+        # Add nickname as searchable (if exists)
+        details = _PHONE_TO_DETAILS_MAP.get(phone, {})
+        nickname = details.get("nickname", "")
+        if nickname:
+            candidates.append((nickname, phone))
+
     # Perform fuzzy matching
     matches = fuzzy_match(name, candidates)
-    
-    # Convert to a list of contact dictionaries
-    results = []
-    for contact_name, phone, score in matches:
-        results.append({
-            "name": contact_name,
-            "phone": phone,
-            "score": score
-        })
-    
+
+    # Deduplicate by phone number, keeping highest score for each
+    seen_phones = {}
+    for matched_name, phone, score in matches:
+        if phone not in seen_phones or score > seen_phones[phone]["score"]:
+            # Get the display name (full name, not nickname)
+            display_name = contacts.get(phone, matched_name)
+            seen_phones[phone] = {
+                "name": display_name,
+                "phone": phone,
+                "score": score,
+                "matched_on": matched_name  # What actually matched (name or nickname)
+            }
+
+    # Convert to sorted list
+    results = sorted(seen_phones.values(), key=lambda x: x["score"], reverse=True)
     return results
 
 def send_message(recipient: str, message: str, group_chat: bool = False) -> str:
@@ -419,6 +478,7 @@ def send_message(recipient: str, message: str, group_chat: bool = False) -> str:
     Args:
         recipient: Phone number, email, contact name, or special format for contact selection
                   Use "contact:N" to select the Nth contact from a previous ambiguous match
+                  For group chats, use the chat ID from tool_get_chats (e.g., "chat123456789")
         message: Message text to send
         group_chat: Whether this is a group chat (uses chat ID instead of buddy)
     
@@ -427,6 +487,11 @@ def send_message(recipient: str, message: str, group_chat: bool = False) -> str:
     """
     # Convert to string to ensure phone numbers work properly
     recipient = str(recipient).strip()
+    
+    # For group chats, skip contact lookup and use the chat ID directly
+    if group_chat:
+        # Use the recipient directly as the chat ID
+        return _send_message_to_recipient(recipient, message, group_chat=True)
     
     # Handle contact selection format (contact:N)
     if recipient.lower().startswith("contact:"):
@@ -443,15 +508,19 @@ def send_message(recipient: str, message: str, group_chat: bool = False) -> str:
             
             # Get the selected contact
             contact = send_message.recent_matches[index]
-            return _send_message_to_recipient(contact['phone'], message, contact['name'], group_chat)
+            return _send_message_to_recipient(contact['phone'], message, contact['name'], group_chat=False)
         except (ValueError, IndexError) as e:
             return f"Error selecting contact: {str(e)}"
     
     # Check if recipient is directly a phone number
     if all(c.isdigit() or c in '+- ()' for c in recipient):
         # Clean the phone number
-        clean_number = ''.join(c for c in recipient if c.isdigit())
-        return _send_message_to_recipient(clean_number, message, group_chat=group_chat)
+        clean_number = normalize_phone_number(recipient)
+        return _send_message_to_recipient(clean_number, message, group_chat=False)
+
+    # Check if recipient is an email address
+    if "@" in recipient:
+        return _send_message_to_recipient(recipient, message, group_chat=False)
     
     # Try to find the contact by name
     contacts = find_contact_by_name(recipient)
@@ -462,7 +531,7 @@ def send_message(recipient: str, message: str, group_chat: bool = False) -> str:
     if len(contacts) == 1:
         # Single match, use it
         contact = contacts[0]
-        return _send_message_to_recipient(contact['phone'], message, contact['name'], group_chat)
+        return _send_message_to_recipient(contact['phone'], message, contact['name'], group_chat=False)
     else:
         # Store the matches for later selection
         send_message.recent_matches = contacts
@@ -601,7 +670,7 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
     if hours > MAX_HOURS:
         return f"Error: Hours value too large. Maximum allowed is {MAX_HOURS} hours (10 years)."
     
-    handle_id = None
+    handle_ids = None
     
     # If contact is specified, try to resolve it
     if contact:
@@ -639,6 +708,7 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
                 return f"Error processing contact selection: {str(e)}"
         
         # Check if contact might be a name rather than a phone number or email
+        # If any character is NOT a phone/email character, treat as a name
         if not all(c.isdigit() or c in '+- ()@.' for c in contact):
             # Try fuzzy matching
             matches = find_contact_by_name(contact)
@@ -658,18 +728,18 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
                 return f"Multiple contacts found matching '{contact}'. Please specify which one using 'contact:N' where N is the number:\n{contact_list}"
         
         # At this point, contact should be a phone number or email
-        # Try to find handle_id with improved phone number matching
+        # Try to find handle_ids with improved phone number matching
         if '@' in contact:
             # This is an email
             query = "SELECT ROWID FROM handle WHERE id = ?"
             results = query_messages_db(query, (contact,))
             if results and not "error" in results[0] and len(results) > 0:
-                handle_id = results[0]["ROWID"]
+                handle_ids = [row["ROWID"] for row in results]
         else:
-            # This is a phone number - try various formats
-            handle_id = find_handle_by_phone(contact)
+            # This is a phone number - try various formats (returns all handles for multi-protocol)
+            handle_ids = find_handles_by_phone(contact)
             
-        if not handle_id:
+        if not handle_ids:
             # Try a direct search in message table to see if any messages exist
             normalized = normalize_phone_number(contact)
             query = """
@@ -719,17 +789,18 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
         CAST(m.date AS TEXT) > ? 
     """
     
-    params = (timestamp_str,)
+    params = [timestamp_str]
     
-    # Add contact filter if handle_id was found
-    if handle_id:
-        query += "AND m.handle_id = ? "
-        params = (timestamp_str, handle_id)
+    # Add contact filter if handle_ids were found (support multiple handles for multi-protocol)
+    if handle_ids:
+        placeholders = ", ".join(["?" for _ in handle_ids])
+        query += f"AND m.handle_id IN ({placeholders}) "
+        params.extend(handle_ids)
     
     query += "ORDER BY m.date DESC LIMIT 100"
     
     # Execute the query
-    messages = query_messages_db(query, params)
+    messages = query_messages_db(query, tuple(params))
     
     # Format the results
     if not messages:
@@ -949,7 +1020,7 @@ def fuzzy_search_messages(
 
 def _check_imessage_availability(recipient: str) -> bool:
     """
-    Check if recipient has iMessage available.
+    Check if recipient has iMessage available by querying the messages database.
     
     Args:
         recipient: Phone number or email to check
@@ -957,31 +1028,50 @@ def _check_imessage_availability(recipient: str) -> bool:
     Returns:
         True if iMessage is available, False otherwise
     """
-    safe_recipient = recipient.replace('"', '\\"')
+    query_params = ()
+
+    if '@' in recipient:
+        placeholders = "?"
+        query_params = (recipient,)
+    else:
+        normalized = normalize_phone_number(recipient)
+
+        if not normalized:
+            return False
+
+        query_params = tuple(_get_phone_formats(normalized))
+        placeholders = ', '.join(['?' for _ in query_params])
+
+    query = f"""
+        SELECT 
+            h.ROWID,
+            h.service,
+            COUNT(m.guid) as text_count,
+            COUNT(CASE WHEN m.error != 0 then 1 END) as errors
+        FROM handle h
+        LEFT JOIN message m ON h.ROWID = m.handle_id
+        WHERE h.id IN ({placeholders})
+        GROUP BY
+            h.ROWID,
+            h.service
+        """
     
-    script = f'''
-    tell application "Messages"
-        try
-            set targetService to 1st service whose service type = iMessage
-            set targetBuddy to buddy "{safe_recipient}" of targetService
-            
-            -- Check if buddy exists and has iMessage capability
-            if targetBuddy exists then
-                return "true"
-            else
-                return "false"
-            end if
-        on error
-            return "false"
-        end try
-    end tell
-    '''
+    result = query_messages_db(query, query_params)
     
-    try:
-        result = run_applescript(script)
-        return result.strip().lower() == "true"
-    except:
+    if not result or "error" in result[0]:
         return False
+        
+    for row in result:
+        service_type = row.get('service', '')
+        text_count = row.get('text_count', 0)
+        num_errors = row.get('errors', 0)
+
+        # Only count as iMessage available if there were successful messages (errors < total)
+        if num_errors < text_count:
+            if service_type in ('iMessage', 'iMessageLite'):
+                return True
+
+    return False
 
 def _send_message_sms(recipient: str, message: str, contact_name: str = None) -> str:
     """
@@ -1203,6 +1293,32 @@ def check_messages_db_access() -> str:
     except Exception as e:
         return f"ERROR: Unexpected error during database access check: {str(e)} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
     
+def _get_phone_formats(recipient: str) -> List[str]:
+    """
+    Get different phone recipient formats. Assumes the recipient given has already been normalized.
+
+    Args:
+        recipient: Normalized phone recipient
+
+    Returns:
+        List of phone recipients in various formats
+    """
+    # Start with the normalized input
+    formats_to_try = [recipient]
+    
+    # For US recipients, try with and without country code
+    if recipient.startswith('1') and len(recipient) > 10:
+        # Try without the country code
+        formats_to_try.append(recipient[1:])
+        formats_to_try.append('+' + recipient)
+
+    elif len(recipient) == 10:
+        # Try with the country code
+        formats_to_try.append('1' + recipient)
+        formats_to_try.append('+1' + recipient)
+
+    return formats_to_try
+
 def find_handle_by_phone(phone: str) -> Optional[int]:
     """
     Find a handle ID by phone number, trying various formats.
@@ -1214,48 +1330,41 @@ def find_handle_by_phone(phone: str) -> Optional[int]:
     Returns:
         handle_id if found, None otherwise
     """
+    handles = find_handles_by_phone(phone)
+    if handles and len(handles) > 0:
+        return handles[0]
+    return None
+
+def find_handles_by_phone(phone: str) -> Optional[List[int]]:
+    """
+    Find all handle IDs by phone number, trying various formats.
+    Returns all handles for multi-protocol support (iMessage, SMS, RCS).
+    
+    Args:
+        phone: Phone number in any format
+        
+    Returns:
+        List of handle_id's if found, None otherwise
+    """
     # Normalize the phone number (remove all non-digit characters)
     normalized = normalize_phone_number(phone)
     if not normalized:
         return None
     
     # Try various formats for US numbers
-    formats_to_try = [normalized]  # Start with the normalized input
-    
-    # For US numbers, try with and without country code
-    if normalized.startswith('1') and len(normalized) > 10:
-        # Try without the country code
-        formats_to_try.append(normalized[1:])
-    elif len(normalized) == 10:
-        # Try with the country code
-        formats_to_try.append('1' + normalized)
-    
-    # Enhanced query that helps distinguish between direct messages and group chats
-    # We'll get all matching handles with additional context
+    formats_to_try = _get_phone_formats(normalized)
+
     placeholders = ', '.join(['?' for _ in formats_to_try])
+
+    # Finds all handle_id's associated with the number
     query = f"""
     SELECT 
-        h.ROWID,
-        h.id,
-        COUNT(DISTINCT chj.chat_id) as chat_count,
-        MIN(chj.chat_id) as min_chat_id,
-        GROUP_CONCAT(DISTINCT c.display_name) as chat_names
-    FROM handle h
-    LEFT JOIN chat_handle_join chj ON h.ROWID = chj.handle_id
-    LEFT JOIN chat c ON chj.chat_id = c.ROWID
-    WHERE h.id IN ({placeholders}) OR h.id IN ({placeholders})
-    GROUP BY h.ROWID, h.id
-    ORDER BY 
-        -- Prioritize handles with fewer chats (likely direct messages)
-        chat_count ASC,
-        -- Then by smallest ROWID (older/more established handles)
-        h.ROWID ASC
+    ROWID
+    FROM handle
+    WHERE id IN ({placeholders})
     """
     
-    # Create parameters list with both the raw formats and with "+" prefix
-    params = formats_to_try + ['+' + f for f in formats_to_try]
-    
-    results = query_messages_db(query, tuple(params))
+    results = query_messages_db(query, tuple(formats_to_try))
     
     if not results or "error" in results[0]:
         return None
@@ -1263,9 +1372,7 @@ def find_handle_by_phone(phone: str) -> Optional[int]:
     if len(results) == 0:
         return None
     
-    # Return the first result (best match based on our ordering)
-    # Our query orders by chat_count ASC (direct messages first) then ROWID ASC
-    return results[0]["ROWID"]
+    return [row["ROWID"] for row in results]
 
 def check_addressbook_access() -> str:
     """Check if the AddressBook database is accessible and return detailed information."""

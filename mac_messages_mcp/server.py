@@ -60,10 +60,11 @@ def tool_send_message(ctx: Context, recipient: str, message: str, group_chat: bo
     Send a message using the Messages app.
     
     Args:
-        recipient: Phone number, email, contact name, or "contact:N" to select from matches
-                  For example, "contact:1" selects the first contact from a previous search
+        recipient: Phone number, email, contact name, or "contact:N" to select from matches.
+                  For example, "contact:1" selects the first contact from a previous search.
+                  For group chats, use the chat ID from tool_get_chats (e.g., "chat123456789" or "iMessage;-;chat123456789").
         message: Message text to send
-        group_chat: Whether to send to a group chat (uses chat ID instead of buddy)
+        group_chat: Set to True when sending to a group chat. Uses the chat ID directly without contact lookup.
     """
     logger.info(f"Sending message to: {recipient}, group_chat: {group_chat}")
     try:

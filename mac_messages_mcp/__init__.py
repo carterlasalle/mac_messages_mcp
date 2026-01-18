@@ -7,6 +7,7 @@ from .messages import (
     check_messages_db_access,
     find_contact_by_name,
     find_handle_by_phone,
+    find_handles_by_phone,
     fuzzy_search_messages,
     get_addressbook_contacts,
     get_cached_contacts,
@@ -31,7 +32,8 @@ __all__ = [
     "check_addressbook_access",
     "find_contact_by_name",
     "find_handle_by_phone",
+    "find_handles_by_phone",
     "fuzzy_search_messages",
 ]
 
-__version__ = "0.7.3"
+__version__ = "0.7.4"
