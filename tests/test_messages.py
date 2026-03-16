@@ -4,7 +4,7 @@ Tests for the messages module
 import unittest
 from unittest.mock import patch, MagicMock
 
-from mac_messages_mcp.messages import run_applescript, get_messages_db_path, query_messages_db
+from mac_messages_mcp.messages import run_applescript, get_messages_db_path, query_messages_db, extract_body_from_attributed
 
 class TestMessages(unittest.TestCase):
     """Tests for the messages module"""
@@ -57,5 +57,102 @@ class TestMessages(unittest.TestCase):
         self.assertEqual(result, '/Users/testuser/Library/Messages/chat.db')
         mock_expanduser.assert_called_with('~')
 
+class TestExtractBodyFromAttributed(unittest.TestCase):
+    """Tests for extract_body_from_attributed"""
+
+    def _build_blob(self, text):
+        """Build a minimal typedstream blob with the given text content"""
+        encoded = text.encode("utf-8")
+        length = len(encoded)
+        # NSString marker + 5-byte header (\x01\x00\x84\x01+) + length byte + text
+        if length < 0x80:
+            length_bytes = bytes([length])
+        else:
+            # 0x81 prefix for 2-byte LE length
+            length_bytes = b"\x81" + length.to_bytes(2, "little")
+        return b"prefix" + b"NSString" + b"\x01\x00\x84\x01+" + length_bytes + encoded + b"trailing"
+
+    def test_none_returns_none(self):
+        """Test that None input returns None"""
+        # Run function
+        result = extract_body_from_attributed(None)
+
+        # Check results
+        self.assertIsNone(result)
+
+    def test_empty_bytes_returns_none(self):
+        """Test that empty bytes returns None"""
+        # Run function
+        result = extract_body_from_attributed(b"")
+
+        # Check results
+        self.assertIsNone(result)
+
+    def test_garbage_bytes_returns_none(self):
+        """Test that random bytes return None without crashing"""
+        # Run function
+        result = extract_body_from_attributed(b"\x00\x01\x02\x03")
+
+        # Check results
+        self.assertIsNone(result)
+
+    def test_valid_short_message(self):
+        """Test extracting a short message (length < 0x80)"""
+        # Setup
+        blob = self._build_blob("Hello")
+
+        # Run function
+        result = extract_body_from_attributed(blob)
+
+        # Check results
+        self.assertEqual(result, "Hello")
+
+    def test_valid_longer_message(self):
+        """Test extracting a message with 2-byte length encoding"""
+        # Setup
+        content = "A" * 200  # > 0x7F, triggers 0x81 length prefix
+        blob = self._build_blob(content)
+
+        # Run function
+        result = extract_body_from_attributed(blob)
+
+        # Check results
+        self.assertEqual(result, content)
+
+    def test_no_nsstring_marker(self):
+        """Test that missing NSString marker returns None"""
+        # Setup
+        body = b"prefix data with no marker trailing"
+
+        # Run function
+        result = extract_body_from_attributed(body)
+
+        # Check results
+        self.assertIsNone(result)
+
+    def test_truncated_after_nsstring(self):
+        """Test that truncated data after NSString returns None"""
+        # Setup - NSString marker but not enough bytes for header
+        body = b"NSString\x01\x00"
+
+        # Run function
+        result = extract_body_from_attributed(body)
+
+        # Check results
+        self.assertIsNone(result)
+
+    def test_random_binary_does_not_crash(self):
+        """Test that random binary data doesn't raise exceptions"""
+        import os
+
+        # Setup
+        random_data = os.urandom(1024)
+
+        # Run function - should not raise
+        result = extract_body_from_attributed(random_data)
+
+        # Check results
+        self.assertIn(type(result), (str, type(None)))
+
 if __name__ == '__main__':
-    unittest.main() 
+    unittest.main()
