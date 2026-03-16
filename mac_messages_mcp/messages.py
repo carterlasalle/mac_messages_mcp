@@ -879,19 +879,18 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
         
         # Convert Apple timestamp to readable date
         try:
-            # Convert Apple timestamp to datetime
-            date_string = '2001-01-01'
-            mod_date = datetime.strptime(date_string, '%Y-%m-%d')
-            unix_timestamp = int(mod_date.timestamp()) * 1000000000
-            
+            apple_epoch_offset = 978307200  # Seconds between Unix epoch and Apple epoch (2001-01-01 UTC)
+
             # Handle both nanosecond and second format timestamps
             msg_timestamp = int(msg["date"])
-            if len(str(msg_timestamp)) > 10:  # It's in nanoseconds
-                new_date = int((msg_timestamp + unix_timestamp) / 1000000000)
-            else:  # It's already in seconds
-                new_date = mod_date.timestamp() + msg_timestamp
-                
-            date_str = datetime.fromtimestamp(new_date).strftime("%Y-%m-%d %H:%M:%S")
+            msg_timestamp_s = (
+                msg_timestamp / 1_000_000_000
+                if len(str(msg_timestamp)) > 10
+                else msg_timestamp
+            )
+
+            date_val = datetime.fromtimestamp(msg_timestamp_s + apple_epoch_offset, tz=timezone.utc)
+            date_str = date_val.astimezone().strftime("%Y-%m-%d %H:%M:%S")
         except (ValueError, TypeError, OverflowError) as e:
             # If conversion fails, use a placeholder
             date_str = "Unknown date"
