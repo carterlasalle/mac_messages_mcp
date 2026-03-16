@@ -8,6 +8,7 @@ import os
 import re
 import sqlite3
 import subprocess
+import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -604,15 +605,15 @@ def _send_message_to_recipient(recipient: str, message: str, contact_name: str =
     Returns:
         Success or error message
     """
+    file_path = None
     try:
-        # Create a temporary file with the message content
-        file_path = os.path.abspath('imessage_tmp.txt')
-        
-        with open(file_path, 'w') as f:
-            f.write(message)
-        
-        # Escape recipient for safe AppleScript interpolation
-        safe_recipient = recipient.replace('\\', '\\\\').replace('"', '\\"')
+        # Create a unique temporary file with the message content
+        tmp = tempfile.NamedTemporaryFile(suffix='.txt', delete=False)
+        file_path = tmp.name
+        try:
+            tmp.write(message.encode('utf-8'))
+        finally:
+            tmp.close()
 
         # Adjust the AppleScript command based on whether this is a group chat
         if not group_chat:
@@ -622,24 +623,25 @@ def _send_message_to_recipient(recipient: str, message: str, contact_name: str =
         
         # Run the AppleScript
         result = run_applescript(command)
-        
-        # Clean up the temporary file
-        try:
-            os.remove(file_path)
-        except:
-            pass
-        
+
         # Check result
         if result.startswith("Error:"):
             # Try fallback to direct method
             return _send_message_direct(recipient, message, contact_name, group_chat)
-        
+
         # Message sent successfully
         display_name = contact_name if contact_name else recipient
         return f"Message sent successfully to {display_name}"
     except Exception as e:
         # Try fallback method
         return _send_message_direct(recipient, message, contact_name, group_chat)
+    finally:
+        # Clean up the temporary file
+        if file_path:
+            try:
+                os.remove(file_path)
+            except OSError:
+                pass
 
 def get_contact_name(handle_id: int) -> str:
     """
