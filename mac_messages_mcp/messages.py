@@ -44,28 +44,76 @@ def get_chat_mapping() -> Dict[str, str]:
 
 def extract_body_from_attributed(attributed_body):
     """
-    Extract message content from attributedBody binary data
+    Extract message content from attributedBody binary data.
+
+    The attributedBody column contains an Apple typedstream blob
+    (NSArchiver serialization of NSMutableAttributedString).  The string
+    content is stored after the first ``NSString`` class marker followed
+    by a 5-byte header (``\\x01 <byte> \\x84 \\x01 +``) and a
+    variable-length integer encoding the byte length of the UTF-8 text.
+
+    Length encoding (first byte after the header):
+        < 0x80  — the byte *is* the length.
+        0x81    — next 2 bytes (little-endian) are the length.
+        0x82    — next 3 bytes (little-endian) are the length.
+        0x83    — next 4 bytes (little-endian) are the length.
     """
     if attributed_body is None:
         return None
-        
+
     try:
-        # Try to decode attributedBody 
-        decoded = attributed_body.decode('utf-8', errors='replace')
-        
-        # Extract content using pattern matching
-        if "NSNumber" in decoded:
-            decoded = decoded.split("NSNumber")[0]
-            if "NSString" in decoded:
-                decoded = decoded.split("NSString")[1]
-                if "NSDictionary" in decoded:
-                    decoded = decoded.split("NSDictionary")[0]
-                    decoded = decoded[6:-12]
-                    return decoded
-    except Exception as e:
-        print(f"Error extracting from attributedBody: {e}")
-    
-    return None
+        # Locate the first NSString class reference in the blob.
+        marker = b"NSString"
+        idx = attributed_body.find(marker)
+        if idx < 0:
+            return None
+
+        # Skip past: NSString (8) + \x01 + <byte> + \x84 + \x01 + '+' = 5 bytes
+        pos = idx + len(marker) + 5
+
+        if pos >= len(attributed_body):
+            return None
+
+        # Read the variable-length integer for the text byte count.
+        length_byte = attributed_body[pos]
+        pos += 1
+
+        if length_byte < 0x80:
+            text_length = length_byte
+        elif length_byte == 0x81:
+            if pos + 2 > len(attributed_body):
+                return None
+            text_length = attributed_body[pos] | (attributed_body[pos + 1] << 8)
+            pos += 2
+        elif length_byte == 0x82:
+            if pos + 3 > len(attributed_body):
+                return None
+            text_length = (
+                attributed_body[pos]
+                | (attributed_body[pos + 1] << 8)
+                | (attributed_body[pos + 2] << 16)
+            )
+            pos += 3
+        elif length_byte == 0x83:
+            if pos + 4 > len(attributed_body):
+                return None
+            text_length = (
+                attributed_body[pos]
+                | (attributed_body[pos + 1] << 8)
+                | (attributed_body[pos + 2] << 16)
+                | (attributed_body[pos + 3] << 24)
+            )
+            pos += 4
+        else:
+            return None
+
+        if pos + text_length > len(attributed_body):
+            return None
+
+        return attributed_body[pos : pos + text_length].decode("utf-8", errors="replace")
+
+    except Exception:
+        return None
 
 
 def get_messages_db_path() -> str:
@@ -569,10 +617,10 @@ def _send_message_to_recipient(recipient: str, message: str, contact_name: str =
 
         # Adjust the AppleScript command based on whether this is a group chat
         if not group_chat:
-            command = f'tell application "Messages" to send (read (POSIX file "{file_path}") as «class utf8») to participant "{recipient}" of (1st service whose service type = iMessage)'
+            command = f'tell application "Messages" to send (read (POSIX file "{file_path}") as «class utf8») to participant "{safe_recipient}" of (1st service whose service type = iMessage)'
         else:
-            command = f'tell application "Messages" to send (read (POSIX file "{file_path}") as «class utf8») to chat "{recipient}"'
-
+            command = f'tell application "Messages" to send (read (POSIX file "{file_path}") as «class utf8») to chat "{safe_recipient}"'
+        
         # Run the AppleScript
         result = run_applescript(command)
 
@@ -833,19 +881,18 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
         
         # Convert Apple timestamp to readable date
         try:
-            # Convert Apple timestamp to datetime
-            date_string = '2001-01-01'
-            mod_date = datetime.strptime(date_string, '%Y-%m-%d')
-            unix_timestamp = int(mod_date.timestamp()) * 1000000000
-            
+            apple_epoch_offset = 978307200  # Seconds between Unix epoch and Apple epoch (2001-01-01 UTC)
+
             # Handle both nanosecond and second format timestamps
             msg_timestamp = int(msg["date"])
-            if len(str(msg_timestamp)) > 10:  # It's in nanoseconds
-                new_date = int((msg_timestamp + unix_timestamp) / 1000000000)
-            else:  # It's already in seconds
-                new_date = mod_date.timestamp() + msg_timestamp
-                
-            date_str = datetime.fromtimestamp(new_date).strftime("%Y-%m-%d %H:%M:%S")
+            msg_timestamp_s = (
+                msg_timestamp / 1_000_000_000
+                if len(str(msg_timestamp)) > 10
+                else msg_timestamp
+            )
+
+            date_val = datetime.fromtimestamp(msg_timestamp_s + apple_epoch_offset, tz=timezone.utc)
+            date_str = date_val.astimezone().strftime("%Y-%m-%d %H:%M:%S")
         except (ValueError, TypeError, OverflowError) as e:
             # If conversion fails, use a placeholder
             date_str = "Unknown date"
@@ -1144,9 +1191,9 @@ def _send_message_direct(
     Returns:
         Success or error message with service type used
     """
-    # Clean the inputs for AppleScript
-    safe_message = message.replace('"', '\\"').replace('\\', '\\\\')
-    safe_recipient = recipient.replace('"', '\\"')
+    # Clean the inputs for AppleScript (escape backslashes first, then quotes)
+    safe_message = message.replace('\\', '\\\\').replace('"', '\\"')
+    safe_recipient = recipient.replace('\\', '\\\\').replace('"', '\\"')
     
     # For group chats, stick to iMessage only (SMS doesn't support group chats well)
     if group_chat:
