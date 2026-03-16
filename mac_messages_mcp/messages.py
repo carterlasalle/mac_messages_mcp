@@ -27,19 +27,23 @@ def run_applescript(script: str) -> str:
 
 def get_chat_mapping() -> Dict[str, str]:
     """
-    Get mapping from room_name to display_name in chat table
+    Get mapping from room_name to display_name in chat table.
+
+    Returns an empty dict if the database is inaccessible or locked.
     """
-    conn = sqlite3.connect(get_messages_db_path())
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT room_name, display_name FROM chat")
-    result_set = cursor.fetchall()
-
-    mapping = {room_name: display_name for room_name, display_name in result_set}
-
-    conn.close()
-
-    return mapping
+    conn = None
+    try:
+        conn = sqlite3.connect(get_messages_db_path())
+        cursor = conn.cursor()
+        cursor.execute("SELECT room_name, display_name FROM chat")
+        result_set = cursor.fetchall()
+        return {room_name: display_name for room_name, display_name in result_set}
+    except Exception as e:
+        print(f"Error reading chat mapping: {e}")
+        return {}
+    finally:
+        if conn:
+            conn.close()
 
 def extract_body_from_attributed(attributed_body):
     """
