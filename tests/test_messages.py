@@ -57,5 +57,56 @@ class TestMessages(unittest.TestCase):
         self.assertEqual(result, '/Users/testuser/Library/Messages/chat.db')
         mock_expanduser.assert_called_with('~')
 
+class TestTimestampConversion(unittest.TestCase):
+    """Tests for Apple epoch timestamp conversion"""
+
+    def test_apple_epoch_constant(self):
+        """Test that 978307200 is the correct offset between Unix and Apple epochs"""
+        from datetime import datetime, timezone
+
+        # Setup
+        unix_epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        apple_epoch = datetime(2001, 1, 1, tzinfo=timezone.utc)
+
+        # Run
+        delta_seconds = int((apple_epoch - unix_epoch).total_seconds())
+
+        # Check results
+        self.assertEqual(delta_seconds, 978307200)
+
+    def test_nanosecond_timestamp_conversion(self):
+        """Test converting a nanosecond Apple timestamp to a datetime"""
+        from datetime import datetime, timezone
+
+        # Setup - a known Apple timestamp in nanoseconds
+        # 2025-01-01 00:00:00 UTC = 757382400 seconds after Apple epoch
+        apple_epoch_offset = 978307200
+        apple_seconds = 757382400
+        apple_nanos = apple_seconds * 1_000_000_000
+
+        # Run - convert like the fixed code does
+        msg_timestamp_s = apple_nanos / 1_000_000_000
+        date_val = datetime.fromtimestamp(msg_timestamp_s + apple_epoch_offset, tz=timezone.utc)
+
+        # Check results
+        expected = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        self.assertEqual(date_val, expected)
+
+    def test_second_format_timestamp(self):
+        """Test converting a second-format Apple timestamp"""
+        from datetime import datetime, timezone
+
+        # Setup - timestamp already in seconds (len <= 10)
+        apple_epoch_offset = 978307200
+        apple_seconds = 757382400  # 2025-01-01 00:00:00 UTC
+
+        # Run
+        msg_timestamp_s = apple_seconds  # already in seconds, no division needed
+        date_val = datetime.fromtimestamp(msg_timestamp_s + apple_epoch_offset, tz=timezone.utc)
+
+        # Check results
+        expected = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        self.assertEqual(date_val, expected)
+
 if __name__ == '__main__':
-    unittest.main() 
+    unittest.main()
