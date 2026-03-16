@@ -563,11 +563,14 @@ def _send_message_to_recipient(recipient: str, message: str, contact_name: str =
         with open(file_path, 'w') as f:
             f.write(message)
         
+        # Escape recipient for safe AppleScript interpolation
+        safe_recipient = recipient.replace('\\', '\\\\').replace('"', '\\"')
+
         # Adjust the AppleScript command based on whether this is a group chat
         if not group_chat:
-            command = f'tell application "Messages" to send (read (POSIX file "{file_path}") as «class utf8») to participant "{recipient}" of (1st service whose service type = iMessage)'
+            command = f'tell application "Messages" to send (read (POSIX file "{file_path}") as «class utf8») to participant "{safe_recipient}" of (1st service whose service type = iMessage)'
         else:
-            command = f'tell application "Messages" to send (read (POSIX file "{file_path}") as «class utf8») to chat "{recipient}"'
+            command = f'tell application "Messages" to send (read (POSIX file "{file_path}") as «class utf8») to chat "{safe_recipient}"'
         
         # Run the AppleScript
         result = run_applescript(command)
@@ -1139,9 +1142,9 @@ def _send_message_direct(
     Returns:
         Success or error message with service type used
     """
-    # Clean the inputs for AppleScript
-    safe_message = message.replace('"', '\\"').replace('\\', '\\\\')
-    safe_recipient = recipient.replace('"', '\\"')
+    # Clean the inputs for AppleScript (escape backslashes first, then quotes)
+    safe_message = message.replace('\\', '\\\\').replace('"', '\\"')
+    safe_recipient = recipient.replace('\\', '\\\\').replace('"', '\\"')
     
     # For group chats, stick to iMessage only (SMS doesn't support group chats well)
     if group_chat:
