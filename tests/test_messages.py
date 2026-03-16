@@ -4,11 +4,11 @@ Tests for the messages module
 import unittest
 from unittest.mock import patch, MagicMock
 
-from mac_messages_mcp.messages import run_applescript, get_messages_db_path, query_messages_db
+from mac_messages_mcp.messages import run_applescript, get_messages_db_path, query_messages_db, _send_message_to_recipient
 
 class TestMessages(unittest.TestCase):
     """Tests for the messages module"""
-    
+
     @patch('subprocess.Popen')
     def test_run_applescript_success(self, mock_popen):
         """Test running AppleScript successfully"""
@@ -17,18 +17,18 @@ class TestMessages(unittest.TestCase):
         process_mock.returncode = 0
         process_mock.communicate.return_value = (b'Success', b'')
         mock_popen.return_value = process_mock
-        
+
         # Run function
         result = run_applescript('tell application "Messages" to get name')
-        
+
         # Check results
         self.assertEqual(result, 'Success')
         mock_popen.assert_called_with(
             ['osascript', '-e', 'tell application "Messages" to get name'],
-            stdout=-1, 
+            stdout=-1,
             stderr=-1
         )
-    
+
     @patch('subprocess.Popen')
     def test_run_applescript_error(self, mock_popen):
         """Test running AppleScript with error"""
@@ -37,22 +37,22 @@ class TestMessages(unittest.TestCase):
         process_mock.returncode = 1
         process_mock.communicate.return_value = (b'', b'Error message')
         mock_popen.return_value = process_mock
-        
+
         # Run function
         result = run_applescript('invalid script')
-        
+
         # Check results
         self.assertEqual(result, 'Error: Error message')
-    
+
     @patch('os.path.expanduser')
     def test_get_messages_db_path(self, mock_expanduser):
         """Test getting the Messages database path"""
         # Setup mock
         mock_expanduser.return_value = '/Users/testuser'
-        
+
         # Run function
         result = get_messages_db_path()
-        
+
         # Check results
         self.assertEqual(result, '/Users/testuser/Library/Messages/chat.db')
         mock_expanduser.assert_called_with('~')
@@ -90,5 +90,63 @@ class TestSendMessageToRecipient(unittest.TestCase):
         self.assertIn('+1234\\"567', call_args)
         self.assertNotIn('"+1234"567"', call_args)
 
+class TestTempFileRace(unittest.TestCase):
+    """Tests for temp file race condition fix in _send_message_to_recipient"""
+
+    @patch('mac_messages_mcp.messages.run_applescript')
+    def test_temp_file_uses_unique_name(self, mock_applescript):
+        """Test that temp file gets a unique name (not hardcoded imessage_tmp.txt)"""
+        import os
+        mock_applescript.return_value = ""
+
+        # Run function
+        _send_message_to_recipient("+15551234567", "test message")
+
+        # Check results - the AppleScript should reference a temp file path
+        script = mock_applescript.call_args[0][0]
+        # Should NOT use the old hardcoded name
+        self.assertNotIn("imessage_tmp.txt", script)
+        # Should reference a temp directory path
+        self.assertTrue(
+            "/tmp/" in script or "/var/folders/" in script,
+            f"Expected temp directory path in script, got: {script[:200]}"
+        )
+
+    @patch('mac_messages_mcp.messages.run_applescript')
+    def test_temp_file_cleaned_up_on_success(self, mock_applescript):
+        """Test that temp file is removed after successful send"""
+        import os
+        import glob
+        mock_applescript.return_value = ""
+
+        # Count temp files before
+        before = set(glob.glob("/tmp/tmp*.txt"))
+
+        # Run function
+        _send_message_to_recipient("+15551234567", "test message")
+
+        # Count temp files after - should not have leaked
+        after = set(glob.glob("/tmp/tmp*.txt"))
+        leaked = after - before
+        self.assertEqual(len(leaked), 0, f"Temp files leaked: {leaked}")
+
+    @patch('mac_messages_mcp.messages.run_applescript')
+    def test_temp_file_cleaned_up_on_error(self, mock_applescript):
+        """Test that temp file is removed even when AppleScript fails"""
+        import os
+        import glob
+        mock_applescript.return_value = "Error: some failure"
+
+        # Count temp files before
+        before = set(glob.glob("/tmp/tmp*.txt"))
+
+        # Run function (will fall back to _send_message_direct which also uses applescript)
+        _send_message_to_recipient("+15551234567", "test message")
+
+        # Count temp files after
+        after = set(glob.glob("/tmp/tmp*.txt"))
+        leaked = after - before
+        self.assertEqual(len(leaked), 0, f"Temp files leaked: {leaked}")
+
 if __name__ == '__main__':
-    unittest.main() 
+    unittest.main()
