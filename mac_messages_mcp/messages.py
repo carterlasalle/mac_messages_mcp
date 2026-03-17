@@ -16,6 +16,15 @@ from typing import Any, Dict, List, Optional, Tuple
 from thefuzz import fuzz
 
 
+def _escape_for_applescript(value: str) -> str:
+    """Escape a string for safe interpolation into an AppleScript double-quoted string.
+
+    Backslashes must be escaped first, then quotes. Reversing this order
+    allows crafted input to break out of the string context.
+    """
+    return value.replace('\\', '\\\\').replace('"', '\\"')
+
+
 def run_applescript(script: str) -> str:
     """Run an AppleScript and return the result."""
     proc = subprocess.Popen(['osascript', '-e', script], 
@@ -609,11 +618,13 @@ def _send_message_to_recipient(recipient: str, message: str, contact_name: str =
     Returns:
         Success or error message
     """
+    safe_recipient = _escape_for_applescript(recipient)
     file_path = None
     try:
         # Create a unique temporary file with the message content
         tmp = tempfile.NamedTemporaryFile(suffix='.txt', delete=False)
         file_path = tmp.name
+        safe_file_path = _escape_for_applescript(file_path)
         try:
             tmp.write(message.encode('utf-8'))
         finally:
@@ -621,9 +632,9 @@ def _send_message_to_recipient(recipient: str, message: str, contact_name: str =
 
         # Adjust the AppleScript command based on whether this is a group chat
         if not group_chat:
-            command = f'tell application "Messages" to send (read (POSIX file "{file_path}") as «class utf8») to participant "{safe_recipient}" of (1st service whose service type = iMessage)'
+            command = f'tell application "Messages" to send (read (POSIX file "{safe_file_path}") as «class utf8») to participant "{safe_recipient}" of (1st service whose service type = iMessage)'
         else:
-            command = f'tell application "Messages" to send (read (POSIX file "{file_path}") as «class utf8») to chat "{safe_recipient}"'
+            command = f'tell application "Messages" to send (read (POSIX file "{safe_file_path}") as «class utf8») to chat "{safe_recipient}"'
         
         # Run the AppleScript
         result = run_applescript(command)
@@ -1141,8 +1152,8 @@ def _send_message_sms(recipient: str, message: str, contact_name: str = None) ->
     Returns:
         Success or error message
     """
-    safe_message = message.replace('"', '\\"').replace('\\', '\\\\')
-    safe_recipient = recipient.replace('"', '\\"')
+    safe_message = _escape_for_applescript(message)
+    safe_recipient = _escape_for_applescript(recipient)
     
     script = f'''
     tell application "Messages"
@@ -1195,9 +1206,9 @@ def _send_message_direct(
     Returns:
         Success or error message with service type used
     """
-    # Clean the inputs for AppleScript (escape backslashes first, then quotes)
-    safe_message = message.replace('\\', '\\\\').replace('"', '\\"')
-    safe_recipient = recipient.replace('\\', '\\\\').replace('"', '\\"')
+    # Clean the inputs for AppleScript
+    safe_message = _escape_for_applescript(message)
+    safe_recipient = _escape_for_applescript(recipient)
     
     # For group chats, stick to iMessage only (SMS doesn't support group chats well)
     if group_chat:

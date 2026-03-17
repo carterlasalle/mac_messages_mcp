@@ -176,11 +176,29 @@ def test_sms_fallback_functionality():
     return True
 
 
+def test_applescript_escape_order():
+    """Test that AppleScript escaping uses correct order to prevent injection"""
+    print("Testing AppleScript escape order...")
+
+    from mac_messages_mcp.messages import _escape_for_applescript
+
+    # Wrong order (quotes first, then backslashes) turns \" into \\"
+    # which leaves the quote unescaped. Correct order escapes the
+    # backslash first, then the quote, so both are safely neutralized.
+    malicious = 'test\\"break'
+    result = _escape_for_applescript(malicious)
+    expected = 'test\\\\\\"break'
+    assert result == expected, f"Expected {expected!r}, got {result!r}"
+    print("AppleScript escape order is correct")
+
+    return True
+
+
 def run_all_tests():
     """Run all tests and report results"""
-    print("🚀 Running Mac Messages MCP Integration Tests")
+    print("Running Mac Messages MCP Integration Tests")
     print("=" * 50)
-    
+
     tests = [
         test_import_fixes,
         test_input_validation,
@@ -188,6 +206,7 @@ def run_all_tests():
         test_no_crashes,
         test_time_ranges,
         test_sms_fallback_functionality,
+        test_applescript_escape_order,
     ]
     
     passed = 0
