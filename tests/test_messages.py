@@ -57,5 +57,38 @@ class TestMessages(unittest.TestCase):
         self.assertEqual(result, '/Users/testuser/Library/Messages/chat.db')
         mock_expanduser.assert_called_with('~')
 
+class TestSendMessageToRecipient(unittest.TestCase):
+    """Tests for _send_message_to_recipient escaping"""
+
+    @patch('mac_messages_mcp.messages.run_applescript')
+    def test_does_not_raise_name_error(self, mock_applescript):
+        """Test that safe_recipient is defined (was NameError after merge)"""
+        from mac_messages_mcp.messages import _send_message_to_recipient
+
+        # Setup mock
+        mock_applescript.return_value = 'Success'
+
+        # Run function — this raised NameError before the fix
+        result = _send_message_to_recipient('+15551234567', 'hello')
+
+        # Check results
+        self.assertIn('sent successfully', result)
+
+    @patch('mac_messages_mcp.messages.run_applescript')
+    def test_recipient_with_quotes_is_escaped(self, mock_applescript):
+        """Test that quotes in recipient don't break the AppleScript command"""
+        from mac_messages_mcp.messages import _send_message_to_recipient
+
+        # Setup mock
+        mock_applescript.return_value = 'Success'
+
+        # Run function with a recipient containing quotes
+        _send_message_to_recipient('+1234"567', 'hello')
+
+        # Check results — the AppleScript command should have escaped quotes
+        call_args = mock_applescript.call_args[0][0]
+        self.assertIn('+1234\\"567', call_args)
+        self.assertNotIn('"+1234"567"', call_args)
+
 if __name__ == '__main__':
     unittest.main() 
