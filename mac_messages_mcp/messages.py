@@ -609,11 +609,14 @@ def _send_message_to_recipient(recipient: str, message: str, contact_name: str =
     Returns:
         Success or error message
     """
+    # Escape inputs for safe AppleScript interpolation (backslashes first, then quotes)
+    safe_recipient = recipient.replace('\\', '\\\\').replace('"', '\\"')
     file_path = None
     try:
         # Create a unique temporary file with the message content
         tmp = tempfile.NamedTemporaryFile(suffix='.txt', delete=False)
         file_path = tmp.name
+        safe_file_path = file_path.replace('\\', '\\\\').replace('"', '\\"')
         try:
             tmp.write(message.encode('utf-8'))
         finally:
@@ -621,9 +624,9 @@ def _send_message_to_recipient(recipient: str, message: str, contact_name: str =
 
         # Adjust the AppleScript command based on whether this is a group chat
         if not group_chat:
-            command = f'tell application "Messages" to send (read (POSIX file "{file_path}") as «class utf8») to participant "{safe_recipient}" of (1st service whose service type = iMessage)'
+            command = f'tell application "Messages" to send (read (POSIX file "{safe_file_path}") as «class utf8») to participant "{safe_recipient}" of (1st service whose service type = iMessage)'
         else:
-            command = f'tell application "Messages" to send (read (POSIX file "{file_path}") as «class utf8») to chat "{safe_recipient}"'
+            command = f'tell application "Messages" to send (read (POSIX file "{safe_file_path}") as «class utf8») to chat "{safe_recipient}"'
         
         # Run the AppleScript
         result = run_applescript(command)
