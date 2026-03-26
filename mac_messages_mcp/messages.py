@@ -263,9 +263,13 @@ def query_addressbook_db(query: str, params: tuple = ()) -> List[Dict[str, Any]]
     try:
         # Find the AddressBook database paths
         home_dir = os.path.expanduser("~")
+        # Check both the top-level DB and source-specific DBs (iCloud, Google, Exchange, etc.)
+        toplevel_path = os.path.join(home_dir, "Library/Application Support/AddressBook/AddressBook-v22.abcddb")
         sources_path = os.path.join(home_dir, "Library/Application Support/AddressBook/Sources/*/AddressBook-v22.abcddb")
         db_paths = glob.glob(sources_path)
-        
+        if os.path.exists(toplevel_path):
+            db_paths.append(toplevel_path)
+
         if not db_paths:
             return [{"error": f"AddressBook database not found at {sources_path} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."}]
         
@@ -300,7 +304,7 @@ def get_addressbook_contacts() -> Dict[str, str]:
     contacts_map = {}
     
     # Define the query to get contact names, nicknames, and phone numbers
-    query = """
+    phone_query = """
     SELECT
         ZABCDRECORD.ZFIRSTNAME as first_name,
         ZABCDRECORD.ZLASTNAME as last_name,
@@ -316,7 +320,24 @@ def get_addressbook_contacts() -> Dict[str, str]:
         ZABCDRECORD.ZFIRSTNAME,
         ZABCDPHONENUMBER.ZORDERINGINDEX ASC
     """
-    
+
+    # Query for email-based contacts (used by iMessage when handle is an email)
+    email_query = """
+    SELECT
+        ZABCDRECORD.ZFIRSTNAME as first_name,
+        ZABCDRECORD.ZLASTNAME as last_name,
+        ZABCDRECORD.ZNICKNAME as nickname,
+        ZABCDEMAILADDRESS.ZADDRESS as email
+    FROM
+        ZABCDRECORD
+        LEFT JOIN ZABCDEMAILADDRESS ON ZABCDRECORD.Z_PK = ZABCDEMAILADDRESS.ZOWNER
+    WHERE
+        ZABCDEMAILADDRESS.ZADDRESS IS NOT NULL
+    ORDER BY
+        ZABCDRECORD.ZLASTNAME,
+        ZABCDRECORD.ZFIRSTNAME
+    """
+
     try:
         # For testing/fallback, parse the user-provided examples in cases where direct DB access fails
         # This is a temporary workaround until full disk access is granted
@@ -325,15 +346,20 @@ def get_addressbook_contacts() -> Dict[str, str]:
                 {"first_name":"TEST", "last_name":"TEST", "phone":"+11111111111"}
             ]
             return process_contacts(contacts)
-        
+
         # Try to query database directly
-        results = query_addressbook_db(query)
-        
+        results = query_addressbook_db(phone_query)
+
         if results and "error" in results[0]:
             print(f"Error getting AddressBook contacts: {results[0]['error']}")
             # Fall back to subprocess method if direct DB access fails
             return get_addressbook_contacts_subprocess()
-        
+
+        # Also query email addresses for email-based iMessage handles
+        email_results = query_addressbook_db(email_query)
+        if email_results and not (len(email_results) > 0 and "error" in email_results[0]):
+            results.extend(email_results)
+
         return process_contacts(results)
     except Exception as e:
         print(f"Error getting AddressBook contacts: {str(e)}")
@@ -351,6 +377,29 @@ def process_contacts(contacts) -> Dict[str, str]:
             last_name = contact.get("last_name", "") or ""
             nickname = contact.get("nickname", "") or ""
             phone = contact.get("phone", "")
+            email = contact.get("email", "")
+
+            # Create full name
+            full_name = " ".join(filter(None, [first_name, last_name]))
+            if not full_name.strip():
+                continue
+
+            # Handle email-based contacts (iMessage handles can be email addresses)
+            if email and not phone:
+                email_lower = email.strip().lower()
+                contacts_map[email_lower] = full_name
+
+                phone_to_details[email_lower] = {
+                    "first_name": first_name.strip(),
+                    "last_name": last_name.strip(),
+                    "nickname": nickname.strip(),
+                    "full_name": full_name
+                }
+
+                if full_name not in name_to_numbers:
+                    name_to_numbers[full_name] = []
+                name_to_numbers[full_name].append(email_lower)
+                continue
 
             # Skip entries without phone numbers
             if not phone:
@@ -359,11 +408,6 @@ def process_contacts(contacts) -> Dict[str, str]:
             # Clean up phone number and remove any image metadata
             if "X-IMAGETYPE" in phone:
                 phone = phone.split("X-IMAGETYPE")[0]
-
-            # Create full name
-            full_name = " ".join(filter(None, [first_name, last_name]))
-            if not full_name.strip():
-                continue
 
             # Normalize phone number and add to map
             normalized_phone = normalize_phone_number(phone)
@@ -667,21 +711,28 @@ def get_contact_name(handle_id: int) -> str:
     
     # Try to match with AddressBook contacts
     contacts = get_cached_contacts()
-    normalized_handle = normalize_phone_number(handle_id_value)
-    
-    # Try different variations of the number for matching
-    if normalized_handle in contacts:
-        return contacts[normalized_handle]
-    
-    # Sometimes numbers in the addressbook have the country code, but messages don't
-    if normalized_handle.startswith('1') and len(normalized_handle) > 10:
-        # Try without country code
-        if normalized_handle[1:] in contacts:
-            return contacts[normalized_handle[1:]]
-    elif len(normalized_handle) == 10:  # US number without country code
-        # Try with country code
-        if '1' + normalized_handle in contacts:
-            return contacts['1' + normalized_handle]
+
+    # Check if handle is an email address (contains @ and no leading +)
+    if '@' in handle_id_value:
+        email_lower = handle_id_value.strip().lower()
+        if email_lower in contacts:
+            return contacts[email_lower]
+    else:
+        normalized_handle = normalize_phone_number(handle_id_value)
+
+        # Try different variations of the number for matching
+        if normalized_handle in contacts:
+            return contacts[normalized_handle]
+
+        # Sometimes numbers in the addressbook have the country code, but messages don't
+        if normalized_handle.startswith('1') and len(normalized_handle) > 10:
+            # Try without country code
+            if normalized_handle[1:] in contacts:
+                return contacts[normalized_handle[1:]]
+        elif len(normalized_handle) == 10:  # US number without country code
+            # Try with country code
+            if '1' + normalized_handle in contacts:
+                return contacts['1' + normalized_handle]
     
     # If no match found in AddressBook, fall back to display name from chat
     contact_query = """
