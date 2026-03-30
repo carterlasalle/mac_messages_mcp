@@ -27,6 +27,10 @@ A Python bridge for interacting with the macOS Messages app using MCP (Multiple 
 
 See the [Integration section](#integration) below for setup instructions.
 
+## Hosted deployment
+
+A hosted deployment is available on [Fronteir AI](https://fronteir.ai/mcp/carterlasalle-mac-messages-mcp).
+
 ## Features
 
 - **Universal Message Sending**: Automatically sends via iMessage or SMS/RCS based on recipient availability
