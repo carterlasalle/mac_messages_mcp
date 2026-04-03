@@ -883,18 +883,19 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
     
     # Build the SQL query - use attributedBody field and text
     query = """
-    SELECT 
+    SELECT
         m.ROWID,
-        m.date, 
-        m.text, 
+        m.date,
+        m.text,
         m.attributedBody,
         m.is_from_me,
         m.handle_id,
-        m.cache_roomnames
-    FROM 
+        m.cache_roomnames,
+        m.cache_has_attachments
+    FROM
         message m
-    WHERE 
-        CAST(m.date AS TEXT) > ? 
+    WHERE
+        CAST(m.date AS TEXT) > ?
     """
     
     params = [timestamp_str]
@@ -923,16 +924,36 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
     formatted_messages = []
     for msg in messages:
         # Get the message content from text or attributedBody
+        has_attachment = msg.get('cache_has_attachments', 0)
         if msg.get('text'):
             body = msg['text']
         elif msg.get('attributedBody'):
             body = extract_body_from_attributed(msg['attributedBody'])
             if not body:
-                # Skip messages with no content
-                continue
+                if has_attachment:
+                    body = ""
+                else:
+                    continue
         else:
-            # Skip empty messages
-            continue
+            if has_attachment:
+                body = ""
+            else:
+                continue
+
+        # Append attachment summary if message has attachments
+        if has_attachment:
+            att_list = get_attachments_for_message(msg['ROWID'])
+            if att_list:
+                att_descriptions = []
+                for att in att_list:
+                    mime = att.get("mime_type") or att.get("uti") or "file"
+                    name = att.get("transfer_name") or (os.path.basename(att["filename"]) if att.get("filename") else "attachment")
+                    att_descriptions.append(f"{name} ({mime})")
+                att_str = ", ".join(att_descriptions)
+                if body:
+                    body = f"{body} [Attachments: {att_str}]"
+                else:
+                    body = f"[Attachments: {att_str}]"
         
         # Convert Apple timestamp to readable date
         try:
@@ -975,6 +996,193 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
 
 # Initialize the static variable for recent matches
 get_recent_messages.recent_matches = []
+
+
+def get_attachments_for_message(message_id: int) -> List[Dict[str, Any]]:
+    """
+    Get attachment details for a specific message.
+
+    Args:
+        message_id: The ROWID of the message in the message table.
+
+    Returns:
+        List of attachment dicts with filename, mime_type, total_bytes, etc.
+    """
+    query = """
+    SELECT
+        a.ROWID,
+        a.guid,
+        a.filename,
+        a.mime_type,
+        a.uti,
+        a.total_bytes,
+        a.transfer_state,
+        a.is_outgoing,
+        a.transfer_name
+    FROM attachment a
+    JOIN message_attachment_join maj ON a.ROWID = maj.attachment_id
+    WHERE maj.message_id = ?
+    """
+    results = query_messages_db(query, (message_id,))
+    if results and "error" in results[0]:
+        return []
+    return results
+
+
+def get_recent_attachments(hours: int = 24, contact: Optional[str] = None, mime_filter: Optional[str] = None) -> str:
+    """
+    Get recent message attachments from the Messages app.
+
+    Args:
+        hours: Number of hours to look back (default: 24)
+        contact: Filter by contact name, phone number, or email (optional).
+                 Use "contact:N" to select a specific contact from previous matches.
+        mime_filter: Filter by MIME type prefix, e.g. "image", "video", "audio" (optional)
+
+    Returns:
+        Formatted string listing recent attachments with metadata.
+    """
+    if hours < 0:
+        return "Error: Hours cannot be negative."
+
+    MAX_HOURS = 10 * 365 * 24
+    if hours > MAX_HOURS:
+        return f"Error: Hours value too large. Maximum allowed is {MAX_HOURS} hours (10 years)."
+
+    handle_ids = None
+
+    if contact:
+        contact = str(contact).strip()
+
+        if contact.lower().startswith("contact:"):
+            try:
+                contact_parts = contact.split(":", 1)
+                if len(contact_parts) < 2 or not contact_parts[1].strip():
+                    return "Error: Invalid contact selection format. Use 'contact:N' where N is a positive number."
+                index = int(contact_parts[1].strip()) - 1
+                if index < 0:
+                    return "Error: Contact selection must be a positive number (starting from 1)."
+                if not hasattr(get_recent_messages, "recent_matches") or not get_recent_messages.recent_matches:
+                    return "No recent contact matches available. Please search for a contact first."
+                if index >= len(get_recent_messages.recent_matches):
+                    return f"Invalid selection. Please choose a number between 1 and {len(get_recent_messages.recent_matches)}."
+                contact = get_recent_messages.recent_matches[index]['phone']
+            except ValueError:
+                return "Error: Contact selection must be a number."
+
+        if not all(c.isdigit() or c in '+- ()@.' for c in contact):
+            matches = find_contact_by_name(contact)
+            if not matches:
+                return f"No contacts found matching '{contact}'."
+            if len(matches) == 1:
+                contact = matches[0]['phone']
+            else:
+                get_recent_messages.recent_matches = matches
+                contact_list = "\n".join([f"{i+1}. {c['name']} ({c['phone']})" for i, c in enumerate(matches[:10])])
+                return f"Multiple contacts found matching '{contact}'. Please specify which one using 'contact:N' where N is the number:\n{contact_list}"
+
+        if '@' in contact:
+            query = "SELECT ROWID FROM handle WHERE id = ?"
+            results = query_messages_db(query, (contact,))
+            if results and "error" not in results[0] and len(results) > 0:
+                handle_ids = [row["ROWID"] for row in results]
+        else:
+            handle_ids = find_handles_by_phone(contact)
+
+        if not handle_ids:
+            return f"No message history found with '{contact}'."
+
+    # Calculate timestamp
+    current_time = datetime.now(timezone.utc)
+    hours_ago = current_time - timedelta(hours=hours)
+    apple_epoch = datetime(2001, 1, 1, tzinfo=timezone.utc)
+    seconds_since_apple_epoch = (hours_ago - apple_epoch).total_seconds()
+    nanoseconds_since_apple_epoch = int(seconds_since_apple_epoch * 1_000_000_000)
+    timestamp_str = str(nanoseconds_since_apple_epoch)
+
+    query = """
+    SELECT
+        m.ROWID as message_id,
+        m.date,
+        m.is_from_me,
+        m.handle_id,
+        a.filename,
+        a.mime_type,
+        a.uti,
+        a.total_bytes,
+        a.transfer_state,
+        a.transfer_name
+    FROM message m
+    JOIN message_attachment_join maj ON m.ROWID = maj.message_id
+    JOIN attachment a ON maj.attachment_id = a.ROWID
+    WHERE CAST(m.date AS TEXT) > ?
+    """
+
+    params: list = [timestamp_str]
+
+    if handle_ids:
+        placeholders = ", ".join(["?" for _ in handle_ids])
+        query += f"AND m.handle_id IN ({placeholders}) "
+        params.extend(handle_ids)
+
+    if mime_filter:
+        query += "AND a.mime_type LIKE ? "
+        params.append(f"{mime_filter}%")
+
+    query += "ORDER BY m.date DESC LIMIT 50"
+
+    attachments = query_messages_db(query, tuple(params))
+
+    if not attachments:
+        return "No attachments found in the specified time period."
+
+    if "error" in attachments[0]:
+        return f"Error accessing attachments: {attachments[0]['error']}"
+
+    chat_mapping = get_chat_mapping()
+    formatted = []
+    for att in attachments:
+        # Convert timestamp
+        try:
+            apple_epoch_offset = 978307200
+            msg_timestamp = int(att["date"])
+            msg_timestamp_s = (
+                msg_timestamp / 1_000_000_000
+                if len(str(msg_timestamp)) > 10
+                else msg_timestamp
+            )
+            date_val = datetime.fromtimestamp(msg_timestamp_s + apple_epoch_offset, tz=timezone.utc)
+            date_str = date_val.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+        except (ValueError, TypeError, OverflowError):
+            date_str = "Unknown date"
+
+        direction = "You" if att["is_from_me"] else get_contact_name(att["handle_id"])
+
+        filename = att.get("filename") or att.get("transfer_name") or "unknown"
+        # Expand ~ in filename
+        if filename.startswith("~"):
+            filename = os.path.expanduser(filename)
+
+        mime = att.get("mime_type") or att.get("uti") or "unknown"
+        size_bytes = att.get("total_bytes", 0)
+        if size_bytes and size_bytes > 0:
+            if size_bytes > 1_000_000:
+                size_str = f"{size_bytes / 1_000_000:.1f} MB"
+            elif size_bytes > 1_000:
+                size_str = f"{size_bytes / 1_000:.1f} KB"
+            else:
+                size_str = f"{size_bytes} bytes"
+        else:
+            size_str = "unknown size"
+
+        transfer = att.get("transfer_state", 0)
+        status = "complete" if transfer == 5 else f"state={transfer}"
+
+        formatted.append(
+            f"[{date_str}] {direction}: [{mime}, {size_str}, {status}] {filename}"
+        )
+
+    return "\n".join(formatted)
 
 
 def fuzzy_search_messages(

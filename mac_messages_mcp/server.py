@@ -16,6 +16,7 @@ from mac_messages_mcp.messages import (
     find_contact_by_name,
     fuzzy_search_messages,
     get_cached_contacts,
+    get_recent_attachments,
     get_recent_messages,
     query_messages_db,
     send_message,
@@ -217,6 +218,34 @@ def tool_check_imessage_availability(ctx: Context, recipient: str) -> str:
     except Exception as e:
         logger.error(f"Error checking iMessage availability: {str(e)}")
         return f"Error checking iMessage availability: {str(e)}"
+
+@mcp.tool()
+def tool_get_recent_attachments(
+    ctx: Context, hours: int = 24, contact: str = None, mime_filter: str = None
+) -> str:
+    """
+    Get recent attachments (images, videos, files) from the Messages app.
+
+    Args:
+        hours: Number of hours to look back (default: 24)
+        contact: Filter by contact name, phone number, or email (optional).
+                 Use "contact:N" to select a specific contact from previous matches.
+        mime_filter: Filter by MIME type prefix, e.g. "image", "video", "audio" (optional)
+    """
+    logger.info(
+        f"Getting recent attachments: hours={hours}, contact={contact}, mime_filter={mime_filter}"
+    )
+    try:
+        if contact is not None:
+            contact = str(contact)
+        result = get_recent_attachments(
+            hours=hours, contact=contact, mime_filter=mime_filter
+        )
+        return result
+    except Exception as e:
+        logger.error(f"Error in get_recent_attachments: {str(e)}")
+        return f"Error getting attachments: {str(e)}"
+
 
 @mcp.tool()
 def tool_fuzzy_search_messages(
