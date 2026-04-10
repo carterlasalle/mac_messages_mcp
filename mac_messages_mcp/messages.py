@@ -663,6 +663,14 @@ def _send_message_to_recipient(recipient: str, message: str, contact_name: str =
         finally:
             tmp.close()
 
+        # Sanitize the recipient before embedding it in AppleScript.
+        # Without this, `safe_recipient` is undefined inside this function and
+        # both branches below raise NameError on every call. The exception is
+        # swallowed by the outer `except Exception`, which silently routes
+        # every send through `_send_message_direct`, making this entire
+        # file-based code path effectively dead.
+        safe_recipient = recipient.replace('\\', '\\\\').replace('"', '\\"')
+
         # Adjust the AppleScript command based on whether this is a group chat
         if not group_chat:
             command = f'tell application "Messages" to send (read (POSIX file "{file_path}") as «class utf8») to participant "{safe_recipient}" of (1st service whose service type = iMessage)'
