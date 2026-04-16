@@ -977,28 +977,34 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
 get_recent_messages.recent_matches = []
 
 
+_MESSAGE_EMOJI_PATTERN = re.compile(
+    "["
+    "\U0001F600-\U0001F64F"
+    "\U0001F300-\U0001F5FF"
+    "\U0001F680-\U0001F6FF"
+    "\U0001F700-\U0001F77F"
+    "\U0001F780-\U0001F7FF"
+    "\U0001F800-\U0001F8FF"
+    "\U0001F900-\U0001F9FF"
+    "\U0001FA00-\U0001FA6F"
+    "\U0001FA70-\U0001FAFF"
+    "\U00002702-\U000027B0"
+    "\U000024C2-\U0001F251"
+    "]+"
+)
+
+# Maximum number of messages returned by a single fuzzy search query.
+# A soft cap — if hit, the user is told results were truncated.
+_FUZZY_SEARCH_SOFT_CAP = 10_000
+
+
 def _clean_message_text(text: str) -> str:
     """Clean message text for search matching.
 
     Lighter than clean_name — removes emoji and normalises whitespace but
     preserves punctuation so URLs and other content stay intact.
     """
-    _emoji_pattern = re.compile(
-        "["
-        "\U0001F600-\U0001F64F"
-        "\U0001F300-\U0001F5FF"
-        "\U0001F680-\U0001F6FF"
-        "\U0001F700-\U0001F77F"
-        "\U0001F780-\U0001F7FF"
-        "\U0001F800-\U0001F8FF"
-        "\U0001F900-\U0001F9FF"
-        "\U0001FA00-\U0001FA6F"
-        "\U0001FA70-\U0001FAFF"
-        "\U00002702-\U000027B0"
-        "\U000024C2-\U0001F251"
-        "]+"
-    )
-    text = _emoji_pattern.sub("", text)
+    text = _MESSAGE_EMOJI_PATTERN.sub("", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
@@ -1048,27 +1054,11 @@ def fuzzy_search_messages(
     escaped_term = _escape_like(search_term)
     like_param = f"%{escaped_term}%"
 
-    _SOFT_CAP = 10_000
+    like_clause = "(m.text LIKE ? ESCAPE '\\' OR (m.text IS NULL AND m.attributedBody IS NOT NULL))"
+    where_clauses = [like_clause]
+    params_list = [like_param]
 
     if hours == 0:
-        # No time limit — search all messages
-        query = """
-        SELECT
-            m.ROWID,
-            m.date,
-            m.text,
-            m.attributedBody,
-            m.is_from_me,
-            m.handle_id,
-            m.cache_roomnames
-        FROM
-            message m
-        WHERE
-            (m.text LIKE ? ESCAPE '\\' OR (m.text IS NULL AND m.attributedBody IS NOT NULL))
-        ORDER BY m.date DESC
-        LIMIT ?
-        """
-        params = (like_param, _SOFT_CAP)
         time_desc = "all time"
     else:
         # Calculate the timestamp for X hours ago
@@ -1081,25 +1071,29 @@ def fuzzy_search_messages(
         nanoseconds_since_apple_epoch = int(seconds_since_apple_epoch * 1_000_000_000)
         timestamp_str = str(nanoseconds_since_apple_epoch)
 
-        query = """
-        SELECT
-            m.ROWID,
-            m.date,
-            m.text,
-            m.attributedBody,
-            m.is_from_me,
-            m.handle_id,
-            m.cache_roomnames
-        FROM
-            message m
-        WHERE
-            CAST(m.date AS TEXT) > ?
-            AND (m.text LIKE ? ESCAPE '\\' OR (m.text IS NULL AND m.attributedBody IS NOT NULL))
-        ORDER BY m.date DESC
-        LIMIT ?
-        """
-        params = (timestamp_str, like_param, _SOFT_CAP)
+        where_clauses.insert(0, "CAST(m.date AS TEXT) > ?")
+        params_list.insert(0, timestamp_str)
         time_desc = f"the last {hours} hours"
+
+    params_list.append(_FUZZY_SEARCH_SOFT_CAP)
+    where_sql = " AND ".join(where_clauses)
+    query = f"""
+    SELECT
+        m.ROWID,
+        m.date,
+        m.text,
+        m.attributedBody,
+        m.is_from_me,
+        m.handle_id,
+        m.cache_roomnames
+    FROM
+        message m
+    WHERE
+        {where_sql}
+    ORDER BY m.date DESC
+    LIMIT ?
+    """
+    params = tuple(params_list)
 
     raw_messages = query_messages_db(query, params)
 
@@ -1149,7 +1143,7 @@ def fuzzy_search_messages(
     if not matched_messages_with_scores:
         return f"No messages found matching '{search_term}' with a threshold of {threshold} in {time_desc}."
 
-    truncated = len(raw_messages) >= _SOFT_CAP
+    truncated = len(raw_messages) >= _FUZZY_SEARCH_SOFT_CAP
 
     chat_mapping = get_chat_mapping()
     formatted_results = []
@@ -1191,7 +1185,7 @@ def fuzzy_search_messages(
     header = f"Found {len(matched_messages_with_scores)} messages matching '{search_term}':\n"
     if truncated:
         header += (
-            f"(Results capped at {_SOFT_CAP} messages — "
+            f"(Results capped at {_FUZZY_SEARCH_SOFT_CAP} messages — "
             "try a shorter time window for more precise results.)\n"
         )
     return header + "\n".join(formatted_results)

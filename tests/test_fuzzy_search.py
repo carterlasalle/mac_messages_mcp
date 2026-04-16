@@ -13,22 +13,23 @@ Test strategy:
 - Group C (search quality): exercise the Python-side matching via mocked DB
   results, asserting scores are well above the threshold for exact substrings.
 - Group D (regressions): existing validation behaviour must be preserved.
+- Group E (helpers): unit tests for internal helpers.
 """
 
 import inspect
-import random
+import itertools
+import re
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from mac_messages_mcp.messages import fuzzy_search_messages
+from mac_messages_mcp.messages import _escape_like, fuzzy_search_messages
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 _APPLE_EPOCH = datetime(2001, 1, 1, tzinfo=timezone.utc)
+_ROWID_COUNTER = itertools.count(1)
 
 
 def _make_message(
@@ -42,7 +43,7 @@ def _make_message(
     msg_time = datetime.now(timezone.utc) - timedelta(days=days_ago)
     ns_timestamp = int((msg_time - _APPLE_EPOCH).total_seconds() * 1_000_000_000)
     return {
-        "ROWID": random.randint(1, 999_999),
+        "ROWID": next(_ROWID_COUNTER),
         "date": ns_timestamp,
         "text": text,
         "attributedBody": None,
@@ -91,8 +92,12 @@ class TestTimeWindow:
         # Must not error or return "0 hours" empty message
         assert "Error" not in result
         assert "last 0 hours" not in result
-        # The SQL should either have no timestamp WHERE clause or
-        # should still return results for old messages
+        # The SQL must not contain a timestamp WHERE clause
+        query_sql = mock_db.call_args[0][0]
+        assert "CAST(m.date AS TEXT) >" not in query_sql, (
+            "hours=0 should skip the timestamp filter, but the SQL still "
+            "contains a date comparison clause."
+        )
         assert "Eva" in result
 
 
@@ -134,8 +139,6 @@ class TestSearchQuality:
         result, _ = _mock_db_and_call(msgs, "Eva", threshold=0.5)
         assert "No messages found" not in result
         # Parse score from output like "(Score: 0.60)"
-        import re
-
         scores = re.findall(r"Score: (\d+\.\d+)", result)
         assert len(scores) >= 1, f"No scores found in result: {result}"
         score = float(scores[0])
@@ -200,3 +203,27 @@ class TestRegressions:
         assert "Error" in result
         result = fuzzy_search_messages("test", threshold=-0.1)
         assert "Error" in result
+
+
+# ---------------------------------------------------------------------------
+# Group E — Helpers
+# ---------------------------------------------------------------------------
+
+
+class TestEscapeLike:
+    """_escape_like must neutralise SQL LIKE wildcards."""
+
+    def test_percent_escaped(self):
+        assert _escape_like("100%") == "100\\%"
+
+    def test_underscore_escaped(self):
+        assert _escape_like("first_name") == "first\\_name"
+
+    def test_backslash_escaped(self):
+        assert _escape_like("path\\to") == "path\\\\to"
+
+    def test_plain_text_unchanged(self):
+        assert _escape_like("hello world") == "hello world"
+
+    def test_all_special_chars(self):
+        assert _escape_like("a%b_c\\d") == "a\\%b\\_c\\\\d"
