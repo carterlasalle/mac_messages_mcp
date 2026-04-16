@@ -24,7 +24,6 @@ import pytest
 
 from mac_messages_mcp.messages import fuzzy_search_messages
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -148,12 +147,8 @@ class TestSearchQuality:
     def test_exact_match_scores_higher_than_fuzzy(self):
         """A message with exact 'divorce' should score higher than one with 'diverse'."""
         msgs = [
-            _make_message(
-                "We need to discuss the divorce papers", days_ago=0.5
-            ),
-            _make_message(
-                "We have a diverse team of engineers", days_ago=0.5
-            ),
+            _make_message("We need to discuss the divorce papers", days_ago=0.5),
+            _make_message("We have a diverse team of engineers", days_ago=0.5),
         ]
         result, _ = _mock_db_and_call(msgs, "divorce", threshold=0.3)
         lines = result.strip().split("\n")

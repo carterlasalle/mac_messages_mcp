@@ -220,7 +220,7 @@ def tool_check_imessage_availability(ctx: Context, recipient: str) -> str:
 
 @mcp.tool()
 def tool_fuzzy_search_messages(
-    ctx: Context, search_term: str, hours: int = 24, threshold: float = 0.6
+    ctx: Context, search_term: str, hours: int = 720, threshold: float = 0.6
 ) -> str:
     """
     Fuzzy search for messages containing the search_term within the last N hours.
@@ -228,13 +228,14 @@ def tool_fuzzy_search_messages(
 
     Args:
         search_term: The text to search for in messages.
-        hours: How many hours back to search (default 24). Must be positive.
+        hours: How many hours back to search (default 720, i.e. 30 days).
+               Use 0 to search all messages with no time limit.
         threshold: Similarity threshold for matching (0.0 to 1.0, default 0.6). Lower is more lenient.
     """
     if not (0.0 <= threshold <= 1.0):
         return "Error: Threshold must be between 0.0 and 1.0."
-    if hours <= 0:
-        return "Error: Hours must be a positive integer."
+    if hours < 0:
+        return "Error: Hours cannot be negative."
 
     logger.info(
         f"Tool: Fuzzy searching messages for '{search_term}' in last {hours} hours with threshold {threshold}"
