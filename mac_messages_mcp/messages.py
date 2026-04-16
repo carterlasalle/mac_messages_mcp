@@ -162,36 +162,44 @@ _CONTACTS_CACHE = None
 _LAST_CACHE_UPDATE = 0
 _CACHE_TTL = 300  # 5 minutes in seconds
 
+_EMOJI_PATTERN = re.compile(
+    "["
+    "\U0001F600-\U0001F64F"  # emoticons
+    "\U0001F300-\U0001F5FF"  # symbols & pictographs
+    "\U0001F680-\U0001F6FF"  # transport & map symbols
+    "\U0001F700-\U0001F77F"  # alchemical symbols
+    "\U0001F780-\U0001F7FF"  # Geometric Shapes
+    "\U0001F800-\U0001F8FF"  # Supplemental Arrows-C
+    "\U0001F900-\U0001F9FF"  # Supplemental Symbols and Pictographs
+    "\U0001FA00-\U0001FA6F"  # Chess Symbols
+    "\U0001FA70-\U0001FAFF"  # Symbols and Pictographs Extended-A
+    "\U00002702-\U000027B0"  # Dingbats
+    "\U000024C2-\U0001F251"
+    "]+"
+)
+
+
+def _clean_text(text: str, strip_punctuation: bool = False) -> str:
+    """Remove emoji and normalise whitespace.
+
+    Args:
+        text: The string to clean.
+        strip_punctuation: If True, also remove all characters that are not
+            alphanumeric, whitespace, apostrophes, or hyphens (used for
+            contact-name matching).
+    """
+    text = _EMOJI_PATTERN.sub("", text)
+    if strip_punctuation:
+        text = re.sub(r"[^\w\s\'\-]", "", text, flags=re.UNICODE)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+
 def clean_name(name: str) -> str:
     """
-    Clean a name by removing emojis and extra whitespace.
+    Clean a name by removing emojis, punctuation, and extra whitespace.
     """
-    # Remove emoji and other non-alphanumeric characters except spaces, hyphens, and apostrophes
-    emoji_pattern = re.compile(
-        "["
-        "\U0001F600-\U0001F64F"  # emoticons
-        "\U0001F300-\U0001F5FF"  # symbols & pictographs
-        "\U0001F680-\U0001F6FF"  # transport & map symbols
-        "\U0001F700-\U0001F77F"  # alchemical symbols
-        "\U0001F780-\U0001F7FF"  # Geometric Shapes
-        "\U0001F800-\U0001F8FF"  # Supplemental Arrows-C
-        "\U0001F900-\U0001F9FF"  # Supplemental Symbols and Pictographs
-        "\U0001FA00-\U0001FA6F"  # Chess Symbols
-        "\U0001FA70-\U0001FAFF"  # Symbols and Pictographs Extended-A
-        "\U00002702-\U000027B0"  # Dingbats
-        "\U000024C2-\U0001F251" 
-        "]+"
-    )
-    
-    name = emoji_pattern.sub(r'', name)
-    
-    # Keep alphanumeric, spaces, apostrophes, and hyphens
-    name = re.sub(r'[^\w\s\'\-]', '', name, flags=re.UNICODE)
-    
-    # Remove extra whitespace
-    name = re.sub(r'\s+', ' ', name).strip()
-    
-    return name
+    return _clean_text(name, strip_punctuation=True)
 
 def fuzzy_match(query: str, candidates: List[Tuple[str, Any]], threshold: float = 0.6) -> List[Tuple[str, Any, float]]:
     """
@@ -977,36 +985,9 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
 get_recent_messages.recent_matches = []
 
 
-_MESSAGE_EMOJI_PATTERN = re.compile(
-    "["
-    "\U0001F600-\U0001F64F"
-    "\U0001F300-\U0001F5FF"
-    "\U0001F680-\U0001F6FF"
-    "\U0001F700-\U0001F77F"
-    "\U0001F780-\U0001F7FF"
-    "\U0001F800-\U0001F8FF"
-    "\U0001F900-\U0001F9FF"
-    "\U0001FA00-\U0001FA6F"
-    "\U0001FA70-\U0001FAFF"
-    "\U00002702-\U000027B0"
-    "\U000024C2-\U0001F251"
-    "]+"
-)
-
 # Maximum number of messages returned by a single fuzzy search query.
 # A soft cap — if hit, the user is told results were truncated.
 _FUZZY_SEARCH_SOFT_CAP = 10_000
-
-
-def _clean_message_text(text: str) -> str:
-    """Clean message text for search matching.
-
-    Lighter than clean_name — removes emoji and normalises whitespace but
-    preserves punctuation so URLs and other content stay intact.
-    """
-    text = _MESSAGE_EMOJI_PATTERN.sub("", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
 
 
 def _escape_like(term: str) -> str:
@@ -1114,13 +1095,13 @@ def fuzzy_search_messages(
         return f"No message content found to search in {time_desc}."
 
     # --- Two-pass matching: exact substring first, then fuzzy ---
-    cleaned_search_term = _clean_message_text(search_term).lower()
+    cleaned_search_term = _clean_text(search_term).lower()
     # thefuzz scores are 0-100. Scale the input threshold (0.0-1.0).
     scaled_threshold = threshold * 100
 
     matched_messages_with_scores = []
     for original_message_text, msg_dict_value in message_candidates:
-        cleaned_candidate_text = _clean_message_text(original_message_text).lower()
+        cleaned_candidate_text = _clean_text(original_message_text).lower()
 
         # Pass 1: exact substring match gets a perfect score
         if cleaned_search_term in cleaned_candidate_text:
