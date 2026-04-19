@@ -667,7 +667,11 @@ def _send_message_to_recipient(recipient: str, message: str, contact_name: str =
         if not group_chat:
             command = f'tell application "Messages" to send (read (POSIX file "{file_path}") as «class utf8») to participant "{safe_recipient}" of (1st service whose service type = iMessage)'
         else:
-            command = f'tell application "Messages" to send (read (POSIX file "{file_path}") as «class utf8») to chat "{safe_recipient}"'
+            # Group chats are addressed by their full chat id (e.g. "iMessage;+;chat123…").
+            # The Messages dictionary requires `chat id "…"`, NOT `chat "…"`:
+            # the latter looks up by the chat's display name and fails for guid-style
+            # identifiers (raises -1728 "Can't get chat …").
+            command = f'tell application "Messages" to send (read (POSIX file "{file_path}") as «class utf8») to chat id "{safe_recipient}"'
         
         # Run the AppleScript
         result = run_applescript(command)
@@ -1255,8 +1259,10 @@ def _send_message_direct(
         script = f'''
         tell application "Messages"
             try
-                -- Try to get the existing chat
-                set targetChat to chat "{safe_recipient}"
+                -- Try to get the existing chat by its full id (e.g. "iMessage;+;chat123…").
+                -- `chat id "…"` looks up by guid; plain `chat "…"` looks up by display
+                -- name and fails on guid-style identifiers with -1728 "Can't get chat".
+                set targetChat to chat id "{safe_recipient}"
                 
                 -- Send the message
                 send "{safe_message}" to targetChat
