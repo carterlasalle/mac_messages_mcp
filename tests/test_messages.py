@@ -4,7 +4,7 @@ Tests for the messages module
 import unittest
 from unittest.mock import patch, MagicMock
 
-from mac_messages_mcp.messages import run_applescript, get_messages_db_path, query_messages_db, extract_body_from_attributed
+from mac_messages_mcp.messages import escape_applescript, run_applescript, get_messages_db_path, query_messages_db, extract_body_from_attributed
 
 class TestMessages(unittest.TestCase):
     """Tests for the messages module"""
@@ -153,6 +153,47 @@ class TestExtractBodyFromAttributed(unittest.TestCase):
 
         # Check results
         self.assertIn(type(result), (str, type(None)))
+
+
+class TestEscapeAppleScript(unittest.TestCase):
+    """Tests for the escape_applescript helper."""
+
+    def test_none_returns_empty(self):
+        self.assertEqual(escape_applescript(None), "")
+
+    def test_plain_string_unchanged(self):
+        self.assertEqual(escape_applescript("hello world"), "hello world")
+
+    def test_double_quote_escaped(self):
+        self.assertEqual(escape_applescript('say "hi"'), 'say \\"hi\\"')
+
+    def test_backslash_escaped_first(self):
+        # Backslashes must be escaped before quotes; otherwise the backslash
+        # injected by quote-escaping would itself get doubled.
+        self.assertEqual(escape_applescript('a\\b"c'), 'a\\\\b\\"c')
+
+    def test_newline_escaped(self):
+        self.assertEqual(escape_applescript("a\nb"), "a\\nb")
+
+    def test_carriage_return_escaped(self):
+        self.assertEqual(escape_applescript("a\rb"), "a\\nb")
+
+    def test_crlf_escaped(self):
+        self.assertEqual(escape_applescript("a\r\nb"), "a\\nb")
+
+    def test_tab_escaped(self):
+        self.assertEqual(escape_applescript("a\tb"), "a\\tb")
+
+    def test_unicode_line_separator_escaped(self):
+        # U+2028 / U+2029 terminate AppleScript string literals.
+        self.assertEqual(escape_applescript("a\u2028b"), "a\\nb")
+        self.assertEqual(escape_applescript("a\u2029b"), "a\\nb")
+
+    def test_combined(self):
+        self.assertEqual(
+            escape_applescript('line1\nline2"end\\'),
+            'line1\\nline2\\"end\\\\',
+        )
 
 if __name__ == '__main__':
     unittest.main()
