@@ -26,6 +26,29 @@ def run_applescript(script: str) -> str:
         return f"Error: {err.decode('utf-8')}"
     return out.decode('utf-8').strip()
 
+
+def escape_applescript(value: str) -> str:
+    """Escape a string for safe interpolation into an AppleScript double-quoted string.
+
+    Escapes backslashes first (so subsequent escapes aren't double-escaped), then
+    double quotes, then control characters that would otherwise terminate the
+    AppleScript string literal or break the script (newlines, carriage returns,
+    tabs). Also handles Unicode line/paragraph separators (U+2028 / U+2029),
+    which AppleScript treats as line terminators.
+    """
+    if value is None:
+        return ""
+    return (
+        value.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\r\n", "\\n")
+        .replace("\r", "\\n")
+        .replace("\n", "\\n")
+        .replace("\t", "\\t")
+        .replace("\u2028", "\\n")
+        .replace("\u2029", "\\n")
+    )
+
 def get_chat_mapping() -> Dict[str, str]:
     """
     Get mapping from room_name to display_name in chat table.
@@ -1192,8 +1215,8 @@ def _send_message_sms(recipient: str, message: str, contact_name: str = None) ->
     Returns:
         Success or error message
     """
-    safe_message = message.replace('"', '\\"').replace('\\', '\\\\')
-    safe_recipient = recipient.replace('"', '\\"')
+    safe_message = escape_applescript(message)
+    safe_recipient = escape_applescript(recipient)
     
     script = f'''
     tell application "Messages"
@@ -1246,9 +1269,10 @@ def _send_message_direct(
     Returns:
         Success or error message with service type used
     """
-    # Clean the inputs for AppleScript (escape backslashes first, then quotes)
-    safe_message = message.replace('\\', '\\\\').replace('"', '\\"')
-    safe_recipient = recipient.replace('\\', '\\\\').replace('"', '\\"')
+    # Clean the inputs for AppleScript using the central helper, which also
+    # handles newlines, tabs, and Unicode line/paragraph separators.
+    safe_message = escape_applescript(message)
+    safe_recipient = escape_applescript(recipient)
     
     # For group chats, stick to iMessage only (SMS doesn't support group chats well)
     if group_chat:
