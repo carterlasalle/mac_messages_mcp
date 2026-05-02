@@ -185,36 +185,44 @@ _CONTACTS_CACHE = None
 _LAST_CACHE_UPDATE = 0
 _CACHE_TTL = 300  # 5 minutes in seconds
 
+_EMOJI_PATTERN = re.compile(
+    "["
+    "\U0001F600-\U0001F64F"  # emoticons
+    "\U0001F300-\U0001F5FF"  # symbols & pictographs
+    "\U0001F680-\U0001F6FF"  # transport & map symbols
+    "\U0001F700-\U0001F77F"  # alchemical symbols
+    "\U0001F780-\U0001F7FF"  # Geometric Shapes
+    "\U0001F800-\U0001F8FF"  # Supplemental Arrows-C
+    "\U0001F900-\U0001F9FF"  # Supplemental Symbols and Pictographs
+    "\U0001FA00-\U0001FA6F"  # Chess Symbols
+    "\U0001FA70-\U0001FAFF"  # Symbols and Pictographs Extended-A
+    "\U00002702-\U000027B0"  # Dingbats
+    "\U000024C2-\U0001F251"
+    "]+"
+)
+
+
+def _clean_text(text: str, strip_punctuation: bool = False) -> str:
+    """Remove emoji and normalise whitespace.
+
+    Args:
+        text: The string to clean.
+        strip_punctuation: If True, also remove all characters that are not
+            alphanumeric, whitespace, apostrophes, or hyphens (used for
+            contact-name matching).
+    """
+    text = _EMOJI_PATTERN.sub("", text)
+    if strip_punctuation:
+        text = re.sub(r"[^\w\s\'\-]", "", text, flags=re.UNICODE)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+
 def clean_name(name: str) -> str:
     """
-    Clean a name by removing emojis and extra whitespace.
+    Clean a name by removing emojis, punctuation, and extra whitespace.
     """
-    # Remove emoji and other non-alphanumeric characters except spaces, hyphens, and apostrophes
-    emoji_pattern = re.compile(
-        "["
-        "\U0001F600-\U0001F64F"  # emoticons
-        "\U0001F300-\U0001F5FF"  # symbols & pictographs
-        "\U0001F680-\U0001F6FF"  # transport & map symbols
-        "\U0001F700-\U0001F77F"  # alchemical symbols
-        "\U0001F780-\U0001F7FF"  # Geometric Shapes
-        "\U0001F800-\U0001F8FF"  # Supplemental Arrows-C
-        "\U0001F900-\U0001F9FF"  # Supplemental Symbols and Pictographs
-        "\U0001FA00-\U0001FA6F"  # Chess Symbols
-        "\U0001FA70-\U0001FAFF"  # Symbols and Pictographs Extended-A
-        "\U00002702-\U000027B0"  # Dingbats
-        "\U000024C2-\U0001F251" 
-        "]+"
-    )
-    
-    name = emoji_pattern.sub(r'', name)
-    
-    # Keep alphanumeric, spaces, apostrophes, and hyphens
-    name = re.sub(r'[^\w\s\'\-]', '', name, flags=re.UNICODE)
-    
-    # Remove extra whitespace
-    name = re.sub(r'\s+', ' ', name).strip()
-    
-    return name
+    return _clean_text(name, strip_punctuation=True)
 
 def fuzzy_match(query: str, candidates: List[Tuple[str, Any]], threshold: float = 0.6) -> List[Tuple[str, Any, float]]:
     """
@@ -1000,9 +1008,19 @@ def get_recent_messages(hours: int = 24, contact: Optional[str] = None) -> str:
 get_recent_messages.recent_matches = []
 
 
+# Maximum number of messages returned by a single fuzzy search query.
+# A soft cap — if hit, the user is told results were truncated.
+_FUZZY_SEARCH_SOFT_CAP = 10_000
+
+
+def _escape_like(term: str) -> str:
+    """Escape SQL LIKE wildcards so the term is matched literally."""
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def fuzzy_search_messages(
     search_term: str,
-    hours: int = 24,
+    hours: int = 720,
     threshold: float = 0.6,  # Default threshold adjusted for thefuzz
 ) -> str:
     """
@@ -1010,7 +1028,8 @@ def fuzzy_search_messages(
 
     Args:
         search_term: The string to search for in message content.
-        hours: Number of hours to look back (default: 24).
+        hours: Number of hours to look back (default: 720, i.e. 30 days).
+               Use 0 to search all messages with no time limit.
         threshold: Minimum similarity score (0.0-1.0) to consider a match (default: 0.6 for WRatio).
                    A lower threshold allows for more lenient matching.
 
@@ -1020,31 +1039,49 @@ def fuzzy_search_messages(
     # Input validation
     if not search_term or not search_term.strip():
         return "Error: Search term cannot be empty."
-    
+
     if hours < 0:
         return "Error: Hours cannot be negative. Please provide a positive number."
-    
+
     # Prevent integer overflow - limit to reasonable maximum (10 years)
     MAX_HOURS = 10 * 365 * 24  # 87,600 hours
     if hours > MAX_HOURS:
         return f"Error: Hours value too large. Maximum allowed is {MAX_HOURS} hours (10 years)."
-    
+
     if not (0.0 <= threshold <= 1.0):
         return "Error: Threshold must be between 0.0 and 1.0."
-    
-    # Calculate the timestamp for X hours ago
-    current_time = datetime.now(timezone.utc)
-    hours_ago_dt = current_time - timedelta(hours=hours)
-    apple_epoch = datetime(2001, 1, 1, tzinfo=timezone.utc)
-    seconds_since_apple_epoch = (hours_ago_dt - apple_epoch).total_seconds()
-    
-    # Convert to nanoseconds (Apple's format)
-    nanoseconds_since_apple_epoch = int(seconds_since_apple_epoch * 1_000_000_000)
-    timestamp_str = str(nanoseconds_since_apple_epoch)
 
-    # Build the SQL query to get all messages in the time window
-    # Limiting to 500 messages to avoid performance issues with very large message histories.
-    query = """
+    # Build the SQL query — use a LIKE pre-filter on the text column to let
+    # SQLite do the heavy lifting for exact substring matches.  Messages
+    # stored only in attributedBody (binary blob) cannot be LIKE-searched,
+    # so we also fetch those and filter in Python.
+    escaped_term = _escape_like(search_term)
+    like_param = f"%{escaped_term}%"
+
+    like_clause = "(m.text LIKE ? ESCAPE '\\' OR (m.text IS NULL AND m.attributedBody IS NOT NULL))"
+    where_clauses = [like_clause]
+    params_list = [like_param]
+
+    if hours == 0:
+        time_desc = "all time"
+    else:
+        # Calculate the timestamp for X hours ago
+        current_time = datetime.now(timezone.utc)
+        hours_ago_dt = current_time - timedelta(hours=hours)
+        apple_epoch = datetime(2001, 1, 1, tzinfo=timezone.utc)
+        seconds_since_apple_epoch = (hours_ago_dt - apple_epoch).total_seconds()
+
+        # Convert to nanoseconds (Apple's format)
+        nanoseconds_since_apple_epoch = int(seconds_since_apple_epoch * 1_000_000_000)
+        timestamp_str = str(nanoseconds_since_apple_epoch)
+
+        where_clauses.insert(0, "CAST(m.date AS TEXT) > ?")
+        params_list.insert(0, timestamp_str)
+        time_desc = f"the last {hours} hours"
+
+    params_list.append(_FUZZY_SEARCH_SOFT_CAP)
+    where_sql = " AND ".join(where_clauses)
+    query = f"""
     SELECT
         m.ROWID,
         m.date,
@@ -1056,15 +1093,16 @@ def fuzzy_search_messages(
     FROM
         message m
     WHERE
-        CAST(m.date AS TEXT) > ?
+        {where_sql}
     ORDER BY m.date DESC
-    LIMIT 500
+    LIMIT ?
     """
-    params = (timestamp_str,)
+    params = tuple(params_list)
+
     raw_messages = query_messages_db(query, params)
 
     if not raw_messages:
-        return f"No messages found in the last {hours} hours to search."
+        return f"No messages found in {time_desc} to search."
     if "error" in raw_messages[0]:
         return f"Error accessing messages: {raw_messages[0]['error']}"
 
@@ -1077,33 +1115,39 @@ def fuzzy_search_messages(
             message_candidates.append((body, msg_dict))
 
     if not message_candidates:
-        return f"No message content found to search in the last {hours} hours."
+        return f"No message content found to search in {time_desc}."
 
-    # --- New fuzzy matching logic using thefuzz ---
-    cleaned_search_term = clean_name(search_term).lower()
+    # --- Two-pass matching: exact substring first, then fuzzy ---
+    cleaned_search_term = _clean_text(search_term).lower()
     # thefuzz scores are 0-100. Scale the input threshold (0.0-1.0).
     scaled_threshold = threshold * 100
 
     matched_messages_with_scores = []
     for original_message_text, msg_dict_value in message_candidates:
-        # We use the original_message_text for matching, which might contain HTML entities etc.
-        # clean_name will handle basic cleaning like emoji removal.
-        cleaned_candidate_text = clean_name(original_message_text).lower()
+        cleaned_candidate_text = _clean_text(original_message_text).lower()
 
-        # Using WRatio for a good balance of matching strategies.
-        score_from_thefuzz = fuzz.WRatio(cleaned_search_term, cleaned_candidate_text)
+        # Pass 1: exact substring match gets a perfect score
+        if cleaned_search_term in cleaned_candidate_text:
+            score_normalised = 1.0
+        else:
+            # Pass 2: fuzzy match via WRatio
+            score_from_thefuzz = fuzz.WRatio(cleaned_search_term, cleaned_candidate_text)
+            if score_from_thefuzz < scaled_threshold:
+                continue
+            score_normalised = score_from_thefuzz / 100.0
 
-        if score_from_thefuzz >= scaled_threshold:
-            # Store score as 0.0-1.0 for consistency with how threshold is defined
-            matched_messages_with_scores.append(
-                (original_message_text, msg_dict_value, score_from_thefuzz / 100.0)
-            )
+        matched_messages_with_scores.append(
+            (original_message_text, msg_dict_value, score_normalised)
+        )
+
     matched_messages_with_scores.sort(
         key=lambda x: x[2], reverse=True
     )  # Sort by score desc
 
     if not matched_messages_with_scores:
-        return f"No messages found matching '{search_term}' with a threshold of {threshold} in the last {hours} hours."
+        return f"No messages found matching '{search_term}' with a threshold of {threshold} in {time_desc}."
+
+    truncated = len(raw_messages) >= _FUZZY_SEARCH_SOFT_CAP
 
     chat_mapping = get_chat_mapping()
     formatted_results = []
@@ -1142,10 +1186,13 @@ def fuzzy_search_messages(
         )
         formatted_results.append(f"{message_prefix} {direction}: {original_body}")
 
-    return (
-        f"Found {len(matched_messages_with_scores)} messages matching '{search_term}':\n"
-        + "\n".join(formatted_results)
-    )
+    header = f"Found {len(matched_messages_with_scores)} messages matching '{search_term}':\n"
+    if truncated:
+        header += (
+            f"(Results capped at {_FUZZY_SEARCH_SOFT_CAP} messages — "
+            "try a shorter time window for more precise results.)\n"
+        )
+    return header + "\n".join(formatted_results)
 
 
 def _check_imessage_availability(recipient: str) -> bool:
