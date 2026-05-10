@@ -487,5 +487,78 @@ class TestEscapeAppleScript(unittest.TestCase):
             'line1\\nline2\\"end\\\\',
         )
 
+
+class TestSendMessageE164Normalization(unittest.TestCase):
+    """`send_message` normalizes phone recipients to E.164 (leading +) before AppleScript."""
+
+    def _run_case(self, recipient, expected_clean):
+        with patch('mac_messages_mcp.messages._send_message_to_recipient') as mock_send:
+            mock_send.return_value = "Message sent successfully to test"
+            from mac_messages_mcp.messages import send_message
+            send_message(recipient=recipient, message="hello")
+            actual = mock_send.call_args.args[0]
+            self.assertEqual(
+                actual,
+                expected_clean,
+                f"recipient={recipient!r}: expected {expected_clean!r}, got {actual!r}",
+            )
+
+    def test_plus_e164_us(self):
+        self._run_case("+12064732279", "+12064732279")
+
+    def test_plus_e164_uk_with_spaces(self):
+        self._run_case("+44 7971 740664", "+447971740664")
+
+    def test_plus_e164_us_with_parens(self):
+        self._run_case("+1 (206) 473-2279", "+12064732279")
+
+    def test_bare_digits_us_country_code_gets_plus(self):
+        # 11 digits, country-code-bearing — must be prepended with + to route reliably.
+        self._run_case("12064732279", "+12064732279")
+
+    def test_bare_digits_uk_country_code_gets_plus(self):
+        # UK 12-digit, no leading + — bare-digit form is unreliable.
+        self._run_case("447967960994", "+447967960994")
+
+    def test_parens_ten_digits_gets_plus(self):
+        # 10 digits after stripping formatting — long enough to E.164-ify.
+        self._run_case("(206) 473-2279", "+2064732279")
+
+    def test_short_digit_string_left_unchanged(self):
+        # Below 10 digits is not a complete phone number; do not prepend +.
+        self._run_case("12345", "12345")
+
+
+class TestFindContactReturnsE164(unittest.TestCase):
+    """`find_contact_by_name` must return phone numbers in E.164 form so the find -> send round-trip stays in the reliable routing path."""
+
+    def _run(self, cached_contacts):
+        from mac_messages_mcp import messages
+        with patch.object(messages, "get_cached_contacts", return_value=cached_contacts), \
+             patch.object(messages, "_PHONE_TO_DETAILS_MAP", {}, create=True):
+            return messages.find_contact_by_name("Test")
+
+    def test_digit_only_phone_gets_plus(self):
+        results = self._run({"12064732279": "Test User"})
+        self.assertTrue(results, "expected at least one match")
+        self.assertEqual(results[0]["phone"], "+12064732279")
+
+    def test_already_plus_left_unchanged(self):
+        results = self._run({"+12064732279": "Test User"})
+        self.assertTrue(results)
+        self.assertEqual(results[0]["phone"], "+12064732279")
+
+    def test_email_left_unchanged(self):
+        results = self._run({"test@example.com": "Test User"})
+        self.assertTrue(results)
+        self.assertEqual(results[0]["phone"], "test@example.com")
+
+    def test_short_digits_left_unchanged(self):
+        # Sub-10-digit short codes are not E.164 candidates.
+        results = self._run({"12345": "Test User"})
+        self.assertTrue(results)
+        self.assertEqual(results[0]["phone"], "12345")
+
+
 if __name__ == '__main__':
     unittest.main()

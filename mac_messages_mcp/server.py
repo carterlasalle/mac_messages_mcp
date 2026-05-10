@@ -45,14 +45,22 @@ def tool_get_recent_messages(
     ctx: Context,
     hours: Annotated[
         int,
-        Field(description="Number of hours to look back from now. Default is 24."),
+        Field(
+            description=(
+                "Number of hours to look back from now. Default 24, maximum 87600 "
+                "(10 years)."
+            ),
+            ge=0,
+            le=87600,
+        ),
     ] = 24,
     contact: Annotated[
         str | None,
         Field(
             description=(
-                "Optional contact filter: contact name, phone number, email address, "
-                'or "contact:N" from a previous contact match list.'
+                "Optional contact filter: a contact name (fuzzy-matched in AddressBook), "
+                "a phone number in E.164 with leading + (e.g. +14155551234), an email "
+                'address, or "contact:N" from a previous contact match list.'
             )
         ),
     ] = None,
@@ -86,8 +94,11 @@ def tool_send_message(
         str,
         Field(
             description=(
-                "Phone number, email address, contact name, contact:N selection, "
-                "or Messages chat ID when group_chat is true."
+                "Phone number in E.164 with leading + (e.g. +14155551234), email "
+                "address, contact name, contact:N selection from a prior match, or a "
+                "Messages chat ID from tool_get_chats when group_chat is true. Phone "
+                "numbers without a leading + may be misrouted (silently dropped while "
+                "the API reports success), so always pass +CCNNN…NNN."
             )
         ),
     ],
@@ -289,7 +300,10 @@ def tool_check_imessage_availability(
     recipient: Annotated[
         str,
         Field(
-            description="Phone number or email address to check for iMessage capability."
+            description=(
+                "Phone number in E.164 with leading + (e.g. +14155551234) or email "
+                "address to check for iMessage capability."
+            )
         ),
     ],
 ) -> str:
@@ -331,9 +345,11 @@ def tool_fuzzy_search_messages(
         int,
         Field(
             description=(
-                "Number of hours to search backward. Default is 720; use 0 for "
-                "all available messages."
-            )
+                "Number of hours to search backward. Default 720 (30 days); use 0 "
+                "for all available messages. Maximum 87600 (10 years)."
+            ),
+            ge=0,
+            le=87600,
         ),
     ] = 720,
     threshold: Annotated[
@@ -390,7 +406,10 @@ def tool_search_attachments(
     contact: Annotated[
         str | None,
         Field(
-            description="Optional contact name, phone number, or email address filter."
+            description=(
+                "Optional contact filter: contact name, phone number in E.164 with "
+                "leading + (e.g. +14155551234), or email address."
+            )
         ),
     ] = None,
     mime_type: Annotated[

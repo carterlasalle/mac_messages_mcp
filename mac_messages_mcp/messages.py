@@ -617,6 +617,19 @@ def find_contact_by_name(name: str) -> List[Dict[str, Any]]:
 
     # Convert to sorted list
     results = sorted(seen_phones.values(), key=lambda x: x["score"], reverse=True)
+
+    # Return phone numbers in E.164 form (leading +) so the natural
+    # find_contact -> send_message round-trip lands in the reliable
+    # AppleScript routing path. AddressBook caches numbers as digit-only;
+    # we add + here without mutating the cache (handle lookups against
+    # chat.db still need the digit-only form).
+    for entry in results:
+        phone = entry.get("phone", "")
+        if phone and "@" not in phone and not phone.lstrip().startswith("+"):
+            digits = "".join(c for c in phone if c.isdigit())
+            if len(digits) >= 10:
+                entry["phone"] = "+" + digits
+
     return results
 
 def send_message(recipient: str, message: str, group_chat: bool = False) -> str:
@@ -662,8 +675,16 @@ def send_message(recipient: str, message: str, group_chat: bool = False) -> str:
     
     # Check if recipient is directly a phone number
     if all(c.isdigit() or c in '+- ()' for c in recipient):
-        # Clean the phone number
+        # Normalize phone numbers to E.164 form (leading +) before passing to
+        # AppleScript. iMessage's registered handles are E.164, and bare-digit
+        # forms route inconsistently — sometimes silently failing while the
+        # AppleScript "API" reports success. `normalize_phone_number` strips
+        # the +; we re-add it whenever the input was E.164 or has at least 10
+        # digits (long enough to be a country-code-bearing phone number).
+        has_plus = recipient.strip().startswith("+")
         clean_number = normalize_phone_number(recipient)
+        if clean_number and (has_plus or len(clean_number) >= 10):
+            clean_number = "+" + clean_number
         return _send_message_to_recipient(clean_number, message, group_chat=False)
 
     # Check if recipient is an email address
