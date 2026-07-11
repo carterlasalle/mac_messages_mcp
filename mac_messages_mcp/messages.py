@@ -18,7 +18,6 @@ from typing import Any, Dict, List, Optional, Tuple
 from mcp.server.fastmcp import Image
 from thefuzz import fuzz
 
-
 _APPLESCRIPT_TIMEOUT_SECONDS = 30
 
 
