@@ -2,6 +2,8 @@
 Mac Messages MCP - A bridge for interacting with macOS Messages app
 """
 
+from importlib.metadata import PackageNotFoundError, version
+
 from .messages import (
     check_addressbook_access,
     check_messages_db_access,
@@ -36,4 +38,7 @@ __all__ = [
     "fuzzy_search_messages",
 ]
 
-__version__ = "0.9.2"
+try:
+    __version__ = version("mac-messages-mcp")
+except PackageNotFoundError:
+    __version__ = "0.0.0+local"

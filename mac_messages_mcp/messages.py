@@ -12,18 +12,35 @@ import subprocess
 import tempfile
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from mcp.server.fastmcp import Image
 from thefuzz import fuzz
 
 
-def run_applescript(script: str) -> str:
+_APPLESCRIPT_TIMEOUT_SECONDS = 30
+
+
+def _connect_sqlite_readonly(path: str) -> sqlite3.Connection:
+    """Open a local SQLite database without write, journal, or creation access."""
+    uri = f"{Path(path).expanduser().resolve().as_uri()}?mode=ro"
+    connection = sqlite3.connect(uri, uri=True)
+    connection.execute("PRAGMA query_only = ON")
+    return connection
+
+
+def run_applescript(script: str, timeout: float = _APPLESCRIPT_TIMEOUT_SECONDS) -> str:
     """Run an AppleScript and return the result."""
     proc = subprocess.Popen(
         ["osascript", "-e", script], stdout=subprocess.PIPE, stderr=subprocess.PIPE
     )
-    out, err = proc.communicate()
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.communicate()
+        return f"Error: AppleScript timed out after {timeout:g} seconds"
     if proc.returncode != 0:
         return f"Error: {err.decode('utf-8')}"
     return out.decode("utf-8").strip()
@@ -60,7 +77,7 @@ def get_chat_mapping() -> Dict[str, str]:
     """
     conn = None
     try:
-        conn = sqlite3.connect(get_messages_db_path())
+        conn = _connect_sqlite_readonly(get_messages_db_path())
         cursor = conn.cursor()
         cursor.execute("SELECT room_name, display_name FROM chat")
         result_set = cursor.fetchall()
@@ -166,7 +183,7 @@ def query_messages_db(query: str, params: tuple = ()) -> List[Dict[str, Any]]:
 
         # Try to connect to the database
         try:
-            conn = sqlite3.connect(db_path)
+            conn = _connect_sqlite_readonly(db_path)
         except sqlite3.OperationalError as e:
             return [
                 {
@@ -368,7 +385,7 @@ def query_addressbook_db(query: str, params: tuple = ()) -> List[Dict[str, Any]]
         all_results = []
         for db_path in db_paths:
             try:
-                conn = sqlite3.connect(db_path)
+                conn = _connect_sqlite_readonly(db_path)
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
                 cursor.execute(query, params)
@@ -1614,7 +1631,7 @@ def check_messages_db_access() -> str:
 
         # Try to connect to the database
         try:
-            conn = sqlite3.connect(db_path)
+            conn = _connect_sqlite_readonly(db_path)
             status.append("Successfully connected to database")
 
             # Test a simple query
@@ -1773,7 +1790,7 @@ def check_addressbook_access() -> str:
 
             # Try to connect to the database
             try:
-                conn = sqlite3.connect(db_path)
+                conn = _connect_sqlite_readonly(db_path)
                 status.append(f"Successfully connected to database: {db_path}")
 
                 # Test a simple query

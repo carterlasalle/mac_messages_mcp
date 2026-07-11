@@ -1,20 +1,14 @@
 # Mac Messages MCP
 
-A Python bridge for interacting with the macOS Messages app using MCP (Multiple Context Protocol). 
+A local-first Model Context Protocol server for reading, searching, and sending through the macOS Messages app.
 
-[![PyPI Downloads](https://static.pepy.tech/badge/mac-messages-mcp)](https://pepy.tech/projects/mac-messages-mcp)
-
-[![Trust Score](https://archestra.ai/mcp-catalog/api/badge/quality/carterlasalle/mac_messages_mcp)](https://archestra.ai/mcp-catalog/carterlasalle__mac_messages_mcp)
-[![mac_messages_mcp MCP score](https://glama.ai/mcp/servers/carterlasalle/mac_messages_mcp/badges/score.svg)](https://glama.ai/mcp/servers/carterlasalle/mac_messages_mcp)
+[![PyPI](https://img.shields.io/pypi/v/mac-messages-mcp)](https://pypi.org/project/mac-messages-mcp/)
+[![Python](https://img.shields.io/pypi/pyversions/mac-messages-mcp)](https://pypi.org/project/mac-messages-mcp/)
+[![CI](https://github.com/carterlasalle/mac_messages_mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/carterlasalle/mac_messages_mcp/actions/workflows/ci.yml)
 
 ![a-diagram-of-a-mac-computer-with-the-tex_FvvnmbaBTFeKy6F2GMlLqA_IfCBMgJARcia1WTH7FaqwA](https://github.com/user-attachments/assets/dbbdaa14-fadd-434d-a265-9e0c0071c11d)
 
-[![Verified on MseeP](https://mseep.ai/badge.svg)](https://mseep.ai/app/fdc62324-6ac9-44e2-8926-722d1157759a)
-
-
-<a href="https://glama.ai/mcp/servers/gxvaoc9znc">
-  <img width="380" height="200" src="https://glama.ai/mcp/servers/gxvaoc9znc/badge" />
-</a>
+Messages and contacts stay on the Mac where this server runs. Database connections are opened read-only; sending is a separate, explicit tool that uses Messages.app automation.
 
 ## Quick Install
 
@@ -59,6 +53,16 @@ For direct sends, E.164 phone numbers with a leading `+` are the most reliable f
 - macOS (tested on macOS 11+)
 - Python 3.10+
 - **uv package manager**
+
+## Security and privacy model
+
+- Message and Contacts databases are opened with SQLite `mode=ro` and `query_only` enabled.
+- The server does not upload a message archive or maintain its own copy of the databases.
+- MCP clients receive only tool results requested in the current session. Attachment retrieval is deliberate and size limited.
+- Sending requires an explicit `tool_send_message` call and uses escaped AppleScript values with a bounded execution timeout.
+- Full Disk Access is powerful. Grant it only to the specific trusted client that launches this server.
+
+See [SECURITY.md](SECURITY.md) for private vulnerability reporting.
 
 ### Installing uv
 

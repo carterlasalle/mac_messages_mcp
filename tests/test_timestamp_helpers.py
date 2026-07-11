@@ -11,6 +11,7 @@ refactor (centralising the inline math into shared helpers) can be
 validated as behaviour-preserving rather than relying on it being
 written correctly by inspection.
 """
+
 import calendar
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -22,7 +23,6 @@ from mac_messages_mcp.messages import (
     fuzzy_search_messages,
     get_recent_messages,
 )
-
 
 # A specific datetime we'll use across multiple tests. Reference values
 # are derived via the Unix epoch and a single 1970->2001 offset so they
@@ -67,6 +67,7 @@ class TestFromAppleNs(unittest.TestCase):
     def setUp(self):
         try:
             from mac_messages_mcp.messages import _from_apple_ns
+
             self._from_apple_ns = _from_apple_ns
         except ImportError as e:
             self.skipTest(f"_from_apple_ns not yet defined: {e}")
@@ -164,10 +165,12 @@ class TestFuzzySearchTimestampParam(unittest.TestCase):
         expected_high = _to_apple_ns(after - timedelta(hours=24))
         # Allow up to 1 second of slop for the now() drift between
         # before/after measurements.
-        self.assertGreaterEqual(cutoff_ns, expected_low - 10**9,
-                                f"cutoff {cutoff_ns} too small")
-        self.assertLessEqual(cutoff_ns, expected_high + 10**9,
-                             f"cutoff {cutoff_ns} too large")
+        self.assertGreaterEqual(
+            cutoff_ns, expected_low - 10**9, f"cutoff {cutoff_ns} too small"
+        )
+        self.assertLessEqual(
+            cutoff_ns, expected_high + 10**9, f"cutoff {cutoff_ns} too large"
+        )
 
     @patch("mac_messages_mcp.messages._attachments_for_message_ids", return_value={})
     @patch("mac_messages_mcp.messages.get_chat_mapping", return_value={})

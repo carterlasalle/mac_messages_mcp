@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: "0.9.25"
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev --python ${{ matrix.python-version }}
+      - name: Test
+        run: uv run --frozen --extra dev --python ${{ matrix.python-version }} pytest
+
+  quality-and-package:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: "0.9.25"
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev --python 3.13
+      - name: Formatting
+        run: |
+          uv run --frozen --extra dev black --check .
+          uv run --frozen --extra dev isort --check-only .
+      - name: Build distributions
+        run: uv build
+      - name: Verify wheel installation
+        run: |
+          uv venv --python 3.13 /tmp/mac-messages-wheel
+          uv pip install --python /tmp/mac-messages-wheel/bin/python dist/*.whl
+          /tmp/mac-messages-wheel/bin/python -c "import mac_messages_mcp; assert mac_messages_mcp.__version__ != '0.0.0+local'"

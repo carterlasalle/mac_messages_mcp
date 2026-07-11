@@ -5,6 +5,7 @@ Style follows the rest of the suite: unittest + mocking. We patch
 query_messages_db to return canned attachment rows and assert that
 filtering, formatting, and progressive-disclosure behaviours all work.
 """
+
 import os
 import unittest
 from unittest.mock import MagicMock, patch
@@ -66,25 +67,31 @@ class TestFilterExcludedAttachments(unittest.TestCase):
         self.assertEqual(_filter_excluded_attachments(rows), [])
 
     def test_drops_plugin_payload_uti(self):
-        rows = [make_attachment_row(
-            uti="com.apple.messages.MSMessageExtensionBalloonPlugin",
-            mime_type=None,
-        )]
+        rows = [
+            make_attachment_row(
+                uti="com.apple.messages.MSMessageExtensionBalloonPlugin",
+                mime_type=None,
+            )
+        ]
         self.assertEqual(_filter_excluded_attachments(rows), [])
 
     def test_drops_pluginpayloadattachment_filename(self):
-        rows = [make_attachment_row(
-            transfer_name="payload.pluginPayloadAttachment",
-            uti=None,
-        )]
+        rows = [
+            make_attachment_row(
+                transfer_name="payload.pluginPayloadAttachment",
+                uti=None,
+            )
+        ]
         self.assertEqual(_filter_excluded_attachments(rows), [])
 
     def test_keeps_pdf(self):
-        rows = [make_attachment_row(
-            mime_type="application/pdf",
-            uti="com.adobe.pdf",
-            transfer_name="letter.pdf",
-        )]
+        rows = [
+            make_attachment_row(
+                mime_type="application/pdf",
+                uti="com.adobe.pdf",
+                transfer_name="letter.pdf",
+            )
+        ]
         self.assertEqual(len(_filter_excluded_attachments(rows)), 1)
 
 
@@ -156,7 +163,7 @@ class TestSearchAttachments(unittest.TestCase):
             ),
         ]
         result = search_attachments()
-        self.assertIn("42", result)         # attachment id is referenceable
+        self.assertIn("42", result)  # attachment id is referenceable
         self.assertIn("image/jpeg", result)  # mime type shown
         self.assertIn("invitation.jpg", result)  # transfer_name shown
 
@@ -178,8 +185,10 @@ class TestSearchAttachments(unittest.TestCase):
         sql, params = call_args[0]
         # Two timestamp params (start, end) + any others
         # Apple ns timestamps should be ints in params
-        self.assertTrue(any(isinstance(p, int) and p > 0 for p in params),
-                        f"Expected an Apple-ns int in params: {params}")
+        self.assertTrue(
+            any(isinstance(p, int) and p > 0 for p in params),
+            f"Expected an Apple-ns int in params: {params}",
+        )
 
     @patch("mac_messages_mcp.messages.get_contact_name", return_value="Someone")
     @patch("mac_messages_mcp.messages.query_messages_db")
@@ -217,7 +226,9 @@ class TestGetAttachment(unittest.TestCase):
     @patch("mac_messages_mcp.messages.os.path.exists", return_value=False)
     @patch("mac_messages_mcp.messages.query_messages_db")
     def test_missing_on_disk_returns_path_with_warning(self, mock_query, _exists):
-        mock_query.return_value = [make_attachment_row(rowid=42, mime_type="image/jpeg")]
+        mock_query.return_value = [
+            make_attachment_row(rowid=42, mime_type="image/jpeg")
+        ]
         result = get_attachment(42)
         self.assertIsInstance(result, str)
         self.assertIn("missing", result.lower())
@@ -226,12 +237,14 @@ class TestGetAttachment(unittest.TestCase):
     @patch("mac_messages_mcp.messages.os.path.exists", return_value=True)
     @patch("mac_messages_mcp.messages.query_messages_db")
     def test_pdf_returns_path_metadata_text(self, mock_query, _exists, _size):
-        mock_query.return_value = [make_attachment_row(
-            rowid=42,
-            mime_type="application/pdf",
-            transfer_name="letter.pdf",
-            uti="com.adobe.pdf",
-        )]
+        mock_query.return_value = [
+            make_attachment_row(
+                rowid=42,
+                mime_type="application/pdf",
+                transfer_name="letter.pdf",
+                uti="com.adobe.pdf",
+            )
+        ]
         result = get_attachment(42)
         # PDF → string (path metadata), not an Image
         self.assertIsInstance(result, str)
@@ -244,12 +257,14 @@ class TestGetAttachment(unittest.TestCase):
     @patch("mac_messages_mcp.messages.os.path.exists", return_value=True)
     @patch("mac_messages_mcp.messages.query_messages_db")
     def test_oversize_image_falls_back_to_path(self, mock_query, _exists, _size):
-        mock_query.return_value = [make_attachment_row(
-            rowid=42,
-            mime_type="image/jpeg",
-            transfer_name="big.jpg",
-            total_bytes=10_000_000,
-        )]
+        mock_query.return_value = [
+            make_attachment_row(
+                rowid=42,
+                mime_type="image/jpeg",
+                transfer_name="big.jpg",
+                total_bytes=10_000_000,
+            )
+        ]
         result = get_attachment(42, max_bytes=5_000_000)
         # Path-only string return (no inline bytes), but path must still be there
         self.assertIsInstance(result, str)
@@ -266,20 +281,21 @@ class TestGetAttachment(unittest.TestCase):
         # One-pixel valid JPEG
         jpeg_bytes = bytes.fromhex(
             "ffd8ffe000104a46494600010100000100010000ffdb0043000806060706050806070707"
-            "09090808"
-            + "0a" * 50
-            + "ffd9"
+            "09090808" + "0a" * 50 + "ffd9"
         )
         with patch("builtins.open", unittest.mock.mock_open(read_data=jpeg_bytes)):
-            mock_query.return_value = [make_attachment_row(
-                rowid=42,
-                mime_type="image/jpeg",
-                transfer_name="photo.jpg",
-                total_bytes=200,
-            )]
+            mock_query.return_value = [
+                make_attachment_row(
+                    rowid=42,
+                    mime_type="image/jpeg",
+                    transfer_name="photo.jpg",
+                    total_bytes=200,
+                )
+            ]
             result = get_attachment(42)
         # Returns a list: [metadata_text, Image]
         from mcp.server.fastmcp import Image
+
         self.assertIsInstance(result, list)
         self.assertEqual(len(result), 2)
         text = next((x for x in result if isinstance(x, str)), None)
@@ -299,18 +315,22 @@ class TestFormatAttachmentSummary(unittest.TestCase):
         self.assertEqual(_format_attachment_summary([]), "")
 
     def test_single_attachment(self):
-        line = _format_attachment_summary([
-            {"id": 42, "mime_type": "image/jpeg", "filename": "photo.jpg"},
-        ])
+        line = _format_attachment_summary(
+            [
+                {"id": 42, "mime_type": "image/jpeg", "filename": "photo.jpg"},
+            ]
+        )
         # Should mention id and mime_type at minimum so agent can call get_attachment
         self.assertIn("42", line)
         self.assertIn("image/jpeg", line)
 
     def test_multiple_attachments_short(self):
-        line = _format_attachment_summary([
-            {"id": 1, "mime_type": "image/jpeg", "filename": "a.jpg"},
-            {"id": 2, "mime_type": "image/heic", "filename": "b.heic"},
-        ])
+        line = _format_attachment_summary(
+            [
+                {"id": 1, "mime_type": "image/jpeg", "filename": "a.jpg"},
+                {"id": 2, "mime_type": "image/heic", "filename": "b.heic"},
+            ]
+        )
         # Both ids surface
         self.assertIn("1", line)
         self.assertIn("2", line)
