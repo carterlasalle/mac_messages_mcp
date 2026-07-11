@@ -73,16 +73,6 @@ def update_files(new_version):
     )
     pyproject_path.write_text(updated_content)
 
-    # Update __init__.py
-    init_path = Path("mac_messages_mcp/__init__.py")
-    content = init_path.read_text()
-    updated_content = re.sub(
-        r'__version__ = "' + VERSION_PATTERN + '"',
-        f'__version__ = "{new_version}"',
-        content,
-    )
-    init_path.write_text(updated_content)
-
     # Update Claude Desktop extension manifest when present
     manifest_path = Path("manifest.json")
     if manifest_path.exists():
@@ -90,9 +80,7 @@ def update_files(new_version):
         manifest["version"] = new_version
         manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
 
-    print(
-        f"Updated version to {new_version} in pyproject.toml, __init__.py, and manifest.json"
-    )
+    print(f"Updated version to {new_version} in pyproject.toml and manifest.json")
 
 
 def create_git_tag(new_version):
@@ -141,7 +129,6 @@ def main():
                 "git",
                 "add",
                 "pyproject.toml",
-                "mac_messages_mcp/__init__.py",
                 "manifest.json",
             ],
             check=True,

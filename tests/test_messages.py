@@ -4,11 +4,13 @@ Tests for the messages module
 
 import os
 import sqlite3
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
 from mac_messages_mcp.messages import (
+    _connect_sqlite_readonly,
     _find_chat_by_identifier,
     _format_phone_for_messages,
     _sanitize_message_body,
@@ -47,6 +49,7 @@ class TestMessages(unittest.TestCase):
             stdout=-1,
             stderr=-1,
         )
+        process_mock.communicate.assert_called_once_with(timeout=30)
 
     @patch("subprocess.Popen")
     def test_run_applescript_error(self, mock_popen):
@@ -62,6 +65,37 @@ class TestMessages(unittest.TestCase):
 
         # Check results
         self.assertEqual(result, "Error: Error message")
+
+    @patch("subprocess.Popen")
+    def test_run_applescript_timeout_kills_process(self, mock_popen):
+        process_mock = MagicMock()
+        process_mock.communicate.side_effect = [
+            subprocess.TimeoutExpired(cmd="osascript", timeout=1),
+            (b"", b""),
+        ]
+        mock_popen.return_value = process_mock
+
+        result = run_applescript("delay 10", timeout=1)
+
+        self.assertEqual(result, "Error: AppleScript timed out after 1 seconds")
+        process_mock.kill.assert_called_once_with()
+
+    def test_readonly_connection_rejects_writes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = os.path.join(directory, "messages.db")
+            writable = sqlite3.connect(db_path)
+            writable.execute("CREATE TABLE message (id INTEGER)")
+            writable.commit()
+            writable.close()
+
+            connection = _connect_sqlite_readonly(db_path)
+            self.assertEqual(
+                connection.execute("SELECT name FROM sqlite_master").fetchone()[0],
+                "message",
+            )
+            with self.assertRaises(sqlite3.OperationalError):
+                connection.execute("INSERT INTO message VALUES (1)")
+            connection.close()
 
     @patch("os.path.expanduser")
     def test_get_messages_db_path(self, mock_expanduser):
