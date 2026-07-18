@@ -15,6 +15,7 @@ from mac_messages_mcp.messages import (
     _format_phone_for_messages,
     _sanitize_message_body,
     _send_message_to_recipient,
+    _verify_send_in_db,
     escape_applescript,
     extract_body_from_attributed,
     find_contact_by_name,
@@ -189,13 +190,25 @@ class TestSanitizeMessageBody(unittest.TestCase):
 class TestSendMessageToRecipient(unittest.TestCase):
     """Tests for _send_message_to_recipient escaping"""
 
+    @patch("mac_messages_mcp.messages.query_messages_db")
     @patch("mac_messages_mcp.messages.run_applescript")
-    def test_does_not_raise_name_error(self, mock_applescript):
+    def test_does_not_raise_name_error(self, mock_applescript, mock_query_db):
         """Test that safe_recipient is defined (was NameError after merge)"""
         from mac_messages_mcp.messages import _send_message_to_recipient
 
-        # Setup mock
+        # Setup mocks: AppleScript accepts the send, and chat.db shows it
+        # went through so the result reports success rather than the
+        # NameError this used to raise.
         mock_applescript.return_value = "Success"
+        mock_query_db.return_value = [
+            {
+                "guid": "abc",
+                "send_error": 0,
+                "is_sent": 1,
+                "is_delivered": 0,
+                "service": "iMessage",
+            }
+        ]
 
         # Run function — this raised NameError before the fix
         result = _send_message_to_recipient("+15551234567", "hello")
@@ -203,13 +216,23 @@ class TestSendMessageToRecipient(unittest.TestCase):
         # Check results
         self.assertIn("sent successfully", result)
 
+    @patch("mac_messages_mcp.messages.query_messages_db")
     @patch("mac_messages_mcp.messages.run_applescript")
-    def test_recipient_with_quotes_is_escaped(self, mock_applescript):
+    def test_recipient_with_quotes_is_escaped(self, mock_applescript, mock_query_db):
         """Test that quotes in recipient don't break the AppleScript command"""
         from mac_messages_mcp.messages import _send_message_to_recipient
 
-        # Setup mock
+        # Setup mocks
         mock_applescript.return_value = "Success"
+        mock_query_db.return_value = [
+            {
+                "guid": "abc",
+                "send_error": 0,
+                "is_sent": 1,
+                "is_delivered": 0,
+                "service": "iMessage",
+            }
+        ]
 
         # Run function with a recipient containing quotes
         _send_message_to_recipient('+1234"567', "hello")
@@ -218,6 +241,95 @@ class TestSendMessageToRecipient(unittest.TestCase):
         call_args = mock_applescript.call_args[0][0]
         self.assertIn('+1234\\"567', call_args)
         self.assertNotIn('"+1234"567"', call_args)
+
+
+class TestVerifySendInDbCorrelation(unittest.TestCase):
+    """
+    Regression tests for _verify_send_in_db's correlation key.
+
+    A plain "latest row after timestamp X, for this handle" query can report
+    the wrong outcome when two sends to the same handle land close together:
+    whichever call polls last sees the *other* call's row as "the latest
+    one". Passing message_text lets each call pick out its own row by body
+    match instead of just grabbing whatever is newest.
+    """
+
+    @patch("mac_messages_mcp.messages.time")
+    @patch("mac_messages_mcp.messages.query_messages_db")
+    def test_matches_own_message_among_concurrent_sends(self, mock_query_db, mock_time):
+        # Two sends to the same handle landed in chat.db between when this
+        # call started polling and now; only the second one is this call's.
+        mock_time.time.side_effect = [0.0, 0.0]
+        mock_query_db.return_value = [
+            {
+                "guid": "guid-2",
+                "send_error": 0,
+                "is_sent": 1,
+                "is_delivered": 0,
+                "service": "iMessage",
+                "text": "second message",
+                "attributedBody": None,
+            },
+            {
+                "guid": "guid-1",
+                "send_error": 0,
+                "is_sent": 1,
+                "is_delivered": 0,
+                "service": "iMessage",
+                "text": "first message",
+                "attributedBody": None,
+            },
+        ]
+
+        row = _verify_send_in_db("+15551234567", 0.0, message_text="first message")
+
+        self.assertEqual(row["guid"], "guid-1")
+
+    @patch("mac_messages_mcp.messages.time")
+    @patch("mac_messages_mcp.messages.query_messages_db")
+    def test_falls_back_to_latest_row_when_no_body_matches(
+        self, mock_query_db, mock_time
+    ):
+        # e.g. an attachment-only send, or Messages re-encoding the text --
+        # don't report a false negative just because the body didn't match.
+        mock_time.time.side_effect = [0.0, 0.0]
+        mock_query_db.return_value = [
+            {
+                "guid": "guid-1",
+                "send_error": 0,
+                "is_sent": 1,
+                "is_delivered": 0,
+                "service": "iMessage",
+                "text": None,
+                "attributedBody": None,
+            }
+        ]
+
+        row = _verify_send_in_db("+15551234567", 0.0, message_text="hello")
+
+        self.assertEqual(row["guid"], "guid-1")
+
+    @patch("mac_messages_mcp.messages.time")
+    @patch("mac_messages_mcp.messages.query_messages_db")
+    def test_no_message_text_preserves_latest_row_behavior(
+        self, mock_query_db, mock_time
+    ):
+        mock_time.time.side_effect = [0.0, 0.0]
+        mock_query_db.return_value = [
+            {
+                "guid": "guid-newest",
+                "send_error": 0,
+                "is_sent": 1,
+                "is_delivered": 0,
+                "service": "iMessage",
+                "text": "whatever",
+                "attributedBody": None,
+            }
+        ]
+
+        row = _verify_send_in_db("+15551234567", 0.0)
+
+        self.assertEqual(row["guid"], "guid-newest")
 
 
 class TestRecipientNormalization(unittest.TestCase):
@@ -271,12 +383,22 @@ class TestRecipientNormalization(unittest.TestCase):
 class TestTempFileRace(unittest.TestCase):
     """Tests for temp file race condition fix in _send_message_to_recipient"""
 
+    @patch("mac_messages_mcp.messages.query_messages_db")
     @patch("mac_messages_mcp.messages.run_applescript")
-    def test_temp_file_uses_unique_name(self, mock_applescript):
+    def test_temp_file_uses_unique_name(self, mock_applescript, mock_query_db):
         """Test that temp file gets a unique name (not hardcoded imessage_tmp.txt)"""
         import os
 
         mock_applescript.return_value = ""
+        mock_query_db.return_value = [
+            {
+                "guid": "abc",
+                "send_error": 0,
+                "is_sent": 1,
+                "is_delivered": 0,
+                "service": "iMessage",
+            }
+        ]
 
         # Run function
         _send_message_to_recipient("+15551234567", "test message")
@@ -291,13 +413,23 @@ class TestTempFileRace(unittest.TestCase):
             f"Expected temp directory path in script, got: {script[:200]}",
         )
 
+    @patch("mac_messages_mcp.messages.query_messages_db")
     @patch("mac_messages_mcp.messages.run_applescript")
-    def test_temp_file_cleaned_up_on_success(self, mock_applescript):
+    def test_temp_file_cleaned_up_on_success(self, mock_applescript, mock_query_db):
         """Test that temp file is removed after successful send"""
         import glob
         import os
 
         mock_applescript.return_value = ""
+        mock_query_db.return_value = [
+            {
+                "guid": "abc",
+                "send_error": 0,
+                "is_sent": 1,
+                "is_delivered": 0,
+                "service": "iMessage",
+            }
+        ]
 
         # Count temp files before
         before = set(glob.glob("/tmp/tmp*.txt"))
@@ -648,6 +780,30 @@ class TestEscapeAppleScript(unittest.TestCase):
             escape_applescript('line1\nline2"end\\'),
             'line1\\nline2\\"end\\\\',
         )
+
+
+class TestCandidateHandles(unittest.TestCase):
+    """Tests for _candidate_handles, used by send-delivery verification."""
+
+    def test_candidate_handles_email(self):
+        from mac_messages_mcp.messages import _candidate_handles
+
+        self.assertEqual(_candidate_handles("a@b.com"), ["a@b.com"])
+
+    def test_candidate_handles_international(self):
+        from mac_messages_mcp.messages import _candidate_handles
+
+        handles = _candidate_handles("+447378174086")
+        self.assertIn("+447378174086", handles)
+        self.assertIn("447378174086", handles)
+
+    def test_candidate_handles_us_number(self):
+        from mac_messages_mcp.messages import _candidate_handles
+
+        handles = _candidate_handles("6058813494")
+        self.assertIn("6058813494", handles)
+        self.assertIn("+16058813494", handles)
+        self.assertIn("16058813494", handles)
 
 
 if __name__ == "__main__":
