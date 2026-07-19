@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mac-messages-mcp"
-version = "0.9.2"
+version = "1.0.0"
 description = "A bridge for interacting with macOS Messages app through MCP"
 readme = {file = "README.md", content-type = "text/markdown"}
 license = "MIT"
@@ -14,7 +14,7 @@ authors = [
 ]
 keywords = ["macos", "messages", "imessage", "mcp"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
@@ -36,6 +36,8 @@ dependencies = [
 "Homepage" = "https://github.com/carterlasalle/mac_messages_mcp"
 "Bug Tracker" = "https://github.com/carterlasalle/mac_messages_mcp/issues"
 "Source" = "https://github.com/carterlasalle/mac_messages_mcp"
+"Changelog" = "https://github.com/carterlasalle/mac_messages_mcp/blob/main/CHANGELOG.md"
+"Releases" = "https://github.com/carterlasalle/mac_messages_mcp/releases"
 
 [project.optional-dependencies]
 dev = [
