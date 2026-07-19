@@ -1,68 +1,80 @@
-# Versioning System
+# Versioning and releases
 
-This project uses automatic semantic versioning that follows the [SemVer](https://semver.org/) specification (MAJOR.MINOR.PATCH).
+Mac Messages MCP follows semantic versioning (`MAJOR.MINOR.PATCH`). The package,
+lockfile, Claude Desktop extension manifest, Git tag, PyPI release, and GitHub
+release must all agree on the same version.
 
-## How Versioning Works
+## Bump a version
 
-The versioning system combines manual and automatic processes:
-
-1. **Local Development**: Developers use the `scripts/bump_version.py` script to manually increment version numbers.
-2. **CI/CD Pipeline**: When a version tag is pushed, the GitHub Actions workflow automatically builds and publishes the package with the correct version number.
-
-## Version Bumping
-
-### Using the Bump Script
-
-We provide a convenient script to bump version numbers across all relevant files:
+Use the repository's UV-backed version command:
 
 ```bash
-# To increment the patch version (0.1.0 -> 0.1.1)
-python scripts/bump_version.py patch
-
-# To increment the minor version (0.1.0 -> 0.2.0)
-python scripts/bump_version.py minor
-
-# To increment the major version (0.1.0 -> 1.0.0)
-python scripts/bump_version.py major
+uv run python scripts/bump_version.py major
+uv run python scripts/bump_version.py minor
+uv run python scripts/bump_version.py patch
 ```
 
-The script will:
-1. Update the version in `pyproject.toml`
-2. Update the version in `manifest.json` when the Claude Desktop extension manifest is present
-3. Optionally commit the changes
-4. Optionally create a Git tag
-
-### Publishing a New Version
-
-To publish a new version:
-
-1. Bump the version using the script above
-2. Push the tag to GitHub:
+An explicit stable version is also supported:
 
 ```bash
-git push origin vX.Y.Z
+uv run python scripts/bump_version.py 1.2.3
 ```
 
-This will trigger the GitHub Actions workflow which will:
-1. Verify the tag matches `pyproject.toml` and `manifest.json`
-2. Build the package with uv
-3. Publish it to PyPI using trusted publishing
+The command is deliberately non-interactive. It:
 
-## Version Files
+1. Runs `uv version`, which updates `pyproject.toml` and `uv.lock` together.
+2. Synchronizes the Claude Desktop extension version in `manifest.json`.
+3. Verifies that all three files contain the same stable version.
+4. Rolls every file back if any part of the update fails.
 
-Versions are stored in the following files:
+It does **not** commit, tag, push, or publish. Those are separate reviewable
+operations.
 
-- `pyproject.toml`: The primary source of version information for the package
-- `mac_messages_mcp/__init__.py`: Reads the installed distribution version dynamically
-- `manifest.json`: Contains the Claude Desktop extension package version
-- Git tags: Used to trigger releases and provide version history
+Preview a change without writing files:
 
-## Versioning Guidelines
+```bash
+uv run python scripts/bump_version.py major --dry-run
+```
 
-Follow these guidelines when deciding which version to bump:
+Validate the current repository metadata:
 
-- **PATCH** (0.0.X): Bug fixes and other minor changes
-- **MINOR** (0.X.0): New features or improvements that don't break existing functionality
-- **MAJOR** (X.0.0): Changes that break backward compatibility
+```bash
+uv run python scripts/bump_version.py --check
+```
 
-Always test the package before releasing a new version, especially for MAJOR and MINOR releases.
+## Release process
+
+1. Run the version command.
+2. Add the new release section to `CHANGELOG.md`.
+3. Open and merge a release pull request after CI is green.
+
+A merge to `main` that changes `pyproject.toml` or `manifest.json` starts the
+trusted release workflow. The workflow then:
+
+1. Synchronizes and commits `uv.lock` if the release branch did not include the
+   generated lockfile change.
+2. Re-validates version metadata and runs tests, formatting, typing, build, and
+   clean-wheel installation checks.
+3. Publishes to PyPI using OIDC trusted publishing; no long-lived PyPI token is
+   stored in GitHub.
+4. Creates an annotated `vX.Y.Z` tag only after PyPI succeeds.
+5. Creates or updates the matching GitHub release using the version's changelog
+   section.
+
+Publishing is idempotent: rerunning the workflow skips files already present on
+PyPI and repairs a missing tag or GitHub release.
+
+## Version authority
+
+- `pyproject.toml` is the canonical project version during development.
+- `uv.lock` is synchronized by `uv version`.
+- `manifest.json` mirrors the version for MCPB packaging.
+- `mac_messages_mcp.__version__` reads the installed package metadata at runtime.
+- `vX.Y.Z` tags and GitHub releases are created by the trusted release workflow.
+
+## Choosing a bump
+
+- **PATCH**: backward-compatible fixes.
+- **MINOR**: backward-compatible features and meaningful improvements.
+- **MAJOR**: a compatibility break or a new stability contract, such as the
+  first stable `1.0.0` release.
