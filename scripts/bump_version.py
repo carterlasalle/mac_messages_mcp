@@ -21,7 +21,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import tomllib
 from pathlib import Path
 from typing import Iterable
 
@@ -35,25 +34,98 @@ class VersionError(RuntimeError):
     """Raised when version metadata is missing or inconsistent."""
 
 
-def _load_toml(path: Path) -> dict:
+def _read_string_assignment(line: str) -> tuple[str, str] | None:
+    """Parse a simple quoted TOML assignment used by release metadata."""
+    key, separator, raw_value = line.partition("=")
+    if not separator:
+        return None
+    key = key.strip()
+    raw_value = raw_value.strip()
     try:
-        with path.open("rb") as handle:
-            return tomllib.load(handle)
+        value = json.loads(raw_value)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(value, str):
+        return None
+    return key, value
+
+
+def _read_project_metadata(path: Path) -> tuple[str, str]:
+    """Read project name/version without adding a Python 3.10 TOML dependency."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
     except FileNotFoundError as exc:
         raise VersionError(f"Required file not found: {path}") from exc
-    except tomllib.TOMLDecodeError as exc:
-        raise VersionError(f"Invalid TOML in {path}: {exc}") from exc
+
+    in_project = False
+    project_name = None
+    project_version = None
+    for raw_line in lines:
+        line = raw_line.strip()
+        if line.startswith("[") and line.endswith("]"):
+            in_project = line == "[project]"
+            continue
+        if not in_project or not line or line.startswith("#"):
+            continue
+        assignment = _read_string_assignment(line)
+        if assignment is None:
+            continue
+        key, value = assignment
+        if key == "name":
+            project_name = value
+        elif key == "version":
+            project_version = value
+
+    if project_name != PROJECT_NAME or project_version is None:
+        raise VersionError(
+            "pyproject.toml is missing the expected project name/version"
+        )
+    return project_name, project_version
+
+
+def _read_lock_version(path: Path) -> str:
+    """Read this project's package version from uv.lock."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError as exc:
+        raise VersionError(f"Required file not found: {path}") from exc
+
+    package_name = None
+    package_version = None
+    in_package = False
+    for raw_line in lines:
+        line = raw_line.strip()
+        if line == "[[package]]":
+            if package_name == PROJECT_NAME and package_version is not None:
+                return package_version
+            package_name = None
+            package_version = None
+            in_package = True
+            continue
+        if line.startswith("[["):
+            if package_name == PROJECT_NAME and package_version is not None:
+                return package_version
+            in_package = False
+            continue
+        if not in_package or not line or line.startswith("#"):
+            continue
+        assignment = _read_string_assignment(line)
+        if assignment is None:
+            continue
+        key, value = assignment
+        if key == "name":
+            package_name = value
+        elif key == "version":
+            package_version = value
+
+    if package_name == PROJECT_NAME and package_version is not None:
+        return package_version
+    raise VersionError(f"uv.lock has no package entry for {PROJECT_NAME}")
 
 
 def read_versions(root: Path) -> dict[str, str]:
     """Read the version from all release metadata files."""
-    pyproject = _load_toml(root / "pyproject.toml")
-    project = pyproject.get("project", {})
-    project_version = project.get("version")
-    if project.get("name") != PROJECT_NAME or not isinstance(project_version, str):
-        raise VersionError(
-            "pyproject.toml is missing the expected project name/version"
-        )
+    _, project_version = _read_project_metadata(root / "pyproject.toml")
 
     manifest_path = root / "manifest.json"
     try:
@@ -66,14 +138,7 @@ def read_versions(root: Path) -> dict[str, str]:
     if not isinstance(manifest_version, str):
         raise VersionError("manifest.json is missing a string version")
 
-    lock = _load_toml(root / "uv.lock")
-    lock_version = None
-    for package in lock.get("package", []):
-        if package.get("name") == PROJECT_NAME:
-            lock_version = package.get("version")
-            break
-    if not isinstance(lock_version, str):
-        raise VersionError(f"uv.lock has no package entry for {PROJECT_NAME}")
+    lock_version = _read_lock_version(root / "uv.lock")
 
     return {
         "pyproject.toml": project_version,
