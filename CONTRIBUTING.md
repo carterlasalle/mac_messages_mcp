@@ -14,6 +14,7 @@ uv run black --check .
 uv run isort --check-only .
 uv run mypy --follow-imports=skip --disable-error-code no-any-return mac_messages_mcp/server.py
 uv build
+yarn global add @anthropic-ai/mcpb@2.1.2
 python scripts/build_mcpb.py --arch arm64
 python scripts/build_mcpb.py --arch x86_64
 ```
