@@ -59,9 +59,10 @@ def test_set_version_delegates_to_uv_and_syncs_manifest(tmp_path: Path) -> None:
         (tmp_path / "manifest.json").write_text(json.dumps(manifest))
         return subprocess.CompletedProcess(command, 0)
 
-    with patch.object(
-        bump_version.shutil, "which", return_value="/usr/bin/uv"
-    ), patch.object(bump_version.subprocess, "run", side_effect=fake_uv):
+    with (
+        patch.object(bump_version.shutil, "which", return_value="/usr/bin/uv"),
+        patch.object(bump_version.subprocess, "run", side_effect=fake_uv),
+    ):
         assert bump_version.set_version(tmp_path, "major") == "1.0.0"
 
     assert json.loads((tmp_path / "manifest.json").read_text())["version"] == "1.0.0"
@@ -78,12 +79,10 @@ def test_set_version_rolls_back_all_files_on_failure(tmp_path: Path) -> None:
         (tmp_path / "pyproject.toml").write_text("broken")
         raise subprocess.CalledProcessError(1, command)
 
-    with patch.object(
-        bump_version.shutil, "which", return_value="/usr/bin/uv"
-    ), patch.object(
-        bump_version.subprocess, "run", side_effect=failing_uv
-    ), pytest.raises(
-        subprocess.CalledProcessError
+    with (
+        patch.object(bump_version.shutil, "which", return_value="/usr/bin/uv"),
+        patch.object(bump_version.subprocess, "run", side_effect=failing_uv),
+        pytest.raises(subprocess.CalledProcessError),
     ):
         bump_version.set_version(tmp_path, "major")
 
