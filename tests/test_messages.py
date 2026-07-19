@@ -21,6 +21,7 @@ from mac_messages_mcp.messages import (
     get_chat_mapping,
     get_messages_db_path,
     get_recent_messages,
+    query_addressbook_db,
     query_messages_db,
     run_applescript,
     send_message,
@@ -96,6 +97,28 @@ class TestMessages(unittest.TestCase):
             with self.assertRaises(sqlite3.OperationalError):
                 connection.execute("INSERT INTO message VALUES (1)")
             connection.close()
+
+    @patch("mac_messages_mcp.messages._connect_sqlite_readonly")
+    @patch("mac_messages_mcp.messages.os.path.exists", return_value=True)
+    @patch(
+        "mac_messages_mcp.messages.get_messages_db_path", return_value="/tmp/chat.db"
+    )
+    def test_query_messages_db_operational_error(self, _path, _exists, mock_connect):
+        mock_connect.side_effect = sqlite3.OperationalError("permission denied")
+
+        result = query_messages_db("SELECT 1")
+
+        self.assertIn("Cannot access Messages database", result[0]["error"])
+
+    @patch("mac_messages_mcp.messages._connect_sqlite_readonly")
+    @patch("mac_messages_mcp.messages.glob.glob", return_value=["/tmp/a.abcddb"])
+    @patch("mac_messages_mcp.messages.os.path.exists", return_value=False)
+    def test_query_addressbook_db_all_sources_fail(self, _exists, _glob, mock_connect):
+        mock_connect.side_effect = sqlite3.OperationalError("permission denied")
+
+        result = query_addressbook_db("SELECT 1")
+
+        self.assertIn("Could not access any AddressBook databases", result[0]["error"])
 
     @patch("os.path.expanduser")
     def test_get_messages_db_path(self, mock_expanduser):
