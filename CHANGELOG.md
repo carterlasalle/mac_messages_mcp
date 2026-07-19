@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-07-18
+
+### Added
+- Added production macOS CI across Python 3.10, 3.11, 3.12, and 3.13 with formatting, typing, distribution-build, clean-wheel-install, and MCPB architecture checks.
+- Added structured GitHub issue forms and a pull-request template with validation and privacy prompts.
+- Added complete setup guidance for Claude Desktop, Claude Code, Codex, Cursor, VS Code, and other stdio MCP clients.
+- Added focused regression coverage for Messages and AddressBook database access failures.
+
+### Changed
+- Declared the project production-stable and established the first supported `1.x` compatibility contract.
+- Replaced the interactive regex-based version script with an atomic, non-interactive UV-backed workflow that synchronizes `pyproject.toml`, `uv.lock`, and `manifest.json`.
+- Made releases idempotent and reviewable: merged version changes are validated, published to PyPI through OIDC trusted publishing, annotated with a Git tag, and published as a GitHub release.
+- Reworked the README around an install, permissions, client configuration, verification, privacy, and troubleshooting flow.
+
+### Security
+- Hardened local database access with SQLite read-only mode and `query_only` enforcement.
+- Bounded and sanitized message output, escaped AppleScript inputs, and added execution timeouts around Messages automation.
+- Kept attachment discovery metadata-first, with explicit fetches and size limits for inline images.
+- Preserved tokenless PyPI publishing; no long-lived package index credential is stored in GitHub.
+
+### Fixed
+- Normalized direct phone recipients to reliable E.164 values and improved contact result formatting.
+- Improved group-chat filtering, attachment handling, package installation verification, and permission diagnostics.
+
+### Compatibility
+- No intentional breaking Python or MCP tool API changes were introduced from 0.9.2; `1.0.0` marks the stable support boundary.
+
 ## [0.9.2] - 2026-05-10
 
 ### Added
