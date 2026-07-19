@@ -10,21 +10,6 @@ A local-first Model Context Protocol server for reading, searching, and sending 
 
 Messages and contacts stay on the Mac where this server runs. Database connections are opened read-only; sending is a separate, explicit tool that uses Messages.app automation.
 
-## Install → Permissions → Verify
-
-1. **Install**
-   ```bash
-   uv pip install mac-messages-mcp
-   ```
-2. **Grant permissions**
-   - Give Full Disk Access to the app launching this server (Cursor, Claude Desktop, Terminal).
-   - Allow Messages automation if you intend to use send tools.
-3. **Verify**
-   - Run the MCP server and call read-only diagnostics first:
-     - `tool_check_db_access`
-     - `tool_check_addressbook`
-     - `tool_get_recent_messages`
-
 ## Quick Install
 
 ### For Cursor Users
@@ -68,15 +53,6 @@ For direct sends, E.164 phone numbers with a leading `+` are the most reliable f
 - macOS (tested on macOS 11+)
 - Python 3.10+
 - **uv package manager**
-
-## Compatibility matrix
-
-| Component | Supported |
-| --- | --- |
-| macOS | 11+ |
-| Python | 3.10, 3.11, 3.12, 3.13 |
-| Claude Desktop | Current MCP extension flow via `manifest.json` / `.mcpb` |
-| Cursor | Current MCP integration via `uvx mac-messages-mcp` |
 
 ## Security and privacy model
 
