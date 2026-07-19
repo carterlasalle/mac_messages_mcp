@@ -4,7 +4,7 @@
   "display_name": "Mac Messages MCP",
   "version": "1.0.0",
   "description": "Query, search, and send macOS Messages through a local MCP server.",
-  "long_description": "Mac Messages MCP runs locally on macOS and provides Claude Desktop with tools for reading recent Messages, fuzzy-searching conversations, resolving contacts, sending iMessage/SMS messages, listing chats, checking permissions, and finding or fetching message attachments. It requires Full Disk Access for Claude Desktop or the terminal used to run it.",
+  "long_description": "Mac Messages MCP 1.0 runs locally on macOS and provides Claude Desktop with stable tools for reading recent Messages, fuzzy-searching conversations, resolving contacts, sending iMessage/SMS messages, listing chats, checking permissions, and finding or fetching message attachments. It requires Full Disk Access for Claude Desktop or the terminal used to run it.",
   "author": {
     "name": "Carter Lasalle",
     "email": "carterlasalle@gmail.com"
