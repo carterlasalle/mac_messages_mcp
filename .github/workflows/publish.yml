@@ -11,17 +11,22 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  id-token: write
+  contents: read
 
 concurrency:
-  group: publish-${{ github.ref }}
+  group: publish-mac-messages-mcp
   cancel-in-progress: false
 
 jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+  prepare:
+    runs-on: macos-latest
+    timeout-minutes: 35
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      release_sha: ${{ steps.release_sha.outputs.sha }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
@@ -66,6 +71,10 @@ jobs:
             git push origin HEAD:main
           fi
 
+      - name: Capture immutable release commit
+        id: release_sha
+        run: echo "sha=$(git rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
+
       - name: Install release dependencies
         run: uv sync --frozen --extra dev --python 3.13
 
@@ -77,10 +86,11 @@ jobs:
       - name: Test
         run: uv run --frozen --extra dev pytest
 
-      - name: Formatting
-        run: |
-          uv run --frozen --extra dev black --check .
-          uv run --frozen --extra dev isort --check-only .
+      - name: Black formatting
+        run: uv run --frozen --extra dev black --check .
+
+      - name: Import ordering
+        run: uv run --frozen --extra dev isort --check-only .
 
       - name: Typing smoke check
         run: uv run --frozen --extra dev mypy --follow-imports=skip --disable-error-code no-any-return mac_messages_mcp/server.py
@@ -97,12 +107,89 @@ jobs:
           INSTALLED_VERSION="$(/tmp/mac-messages-release/bin/python -c 'from importlib.metadata import version; print(version("mac-messages-mcp"))')"
           test "${INSTALLED_VERSION}" = "${VERSION}"
 
+  publish:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ needs.prepare.outputs.release_sha }}
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: "0.9.25"
+          enable-cache: true
+
+      - name: Verify immutable release metadata
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: uv run --no-project python scripts/bump_version.py --check --expected "${VERSION}"
+
+      - name: Build immutable distributions with UV
+        run: uv build
+
       - name: Publish to PyPI with trusted publishing
-        run: uv publish --trusted-publishing always --check-url https://pypi.org/simple
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
+        with:
+          packages-dir: dist
+          skip-existing: true
+          verify-metadata: true
+          print-hash: true
+          verbose: true
+          attestations: true
+
+      - name: Verify PyPI filenames and SHA-256 digests
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import time
+          import urllib.error
+          import urllib.request
+          from pathlib import Path
+
+          version = os.environ["VERSION"]
+          url = f"https://pypi.org/pypi/mac-messages-mcp/{version}/json"
+          payload = None
+          for attempt in range(12):
+              try:
+                  with urllib.request.urlopen(url, timeout=20) as response:
+                      payload = json.load(response)
+                  break
+              except urllib.error.HTTPError as exc:
+                  if exc.code != 404 or attempt == 11:
+                      raise
+              time.sleep(5)
+          if payload is None:
+              raise SystemExit(f"PyPI did not expose mac-messages-mcp {version}")
+
+          remote = {
+              item["filename"]: item["digests"]["sha256"]
+              for item in payload.get("urls", [])
+          }
+          local_files = sorted(Path("dist").iterdir())
+          if not local_files:
+              raise SystemExit("No local distributions were built")
+          for path in local_files:
+              digest = hashlib.sha256(path.read_bytes()).hexdigest()
+              if path.name not in remote:
+                  raise SystemExit(f"PyPI is missing {path.name}")
+              if remote[path.name] != digest:
+                  raise SystemExit(f"PyPI digest mismatch for {path.name}")
+              print(f"verified {path.name}: {digest}")
+          PY
 
       - name: Extract release notes
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           python - <<'PY' > release-notes.md
           import os
@@ -122,25 +209,25 @@ jobs:
               print(f"Mac Messages MCP {version}")
           PY
 
-      - name: Create annotated tag
+      - name: Create annotated tag at the verified release commit
         env:
-          TAG: ${{ steps.version.outputs.tag }}
+          RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
+          TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           set -euo pipefail
           git fetch --tags --force
-          RELEASE_SHA="$(git rev-parse HEAD)"
           if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
             TAG_SHA="$(git rev-list -n 1 "${TAG}")"
             test "${TAG_SHA}" = "${RELEASE_SHA}"
           else
-            git tag -a "${TAG}" -m "Mac Messages MCP ${TAG}"
+            git tag -a "${TAG}" "${RELEASE_SHA}" -m "Mac Messages MCP ${TAG}"
             git push origin "${TAG}"
           fi
 
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.version.outputs.tag }}
+          TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           set -euo pipefail
           if gh release view "${TAG}" >/dev/null 2>&1; then
