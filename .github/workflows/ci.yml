@@ -44,10 +44,10 @@ jobs:
         run: uv sync --frozen --extra dev --python 3.13
       - name: Verify version metadata
         run: uv run --frozen --extra dev python scripts/bump_version.py --check --ignore-lock
-      - name: Formatting
-        run: |
-          uv run --frozen --extra dev black --check .
-          uv run --frozen --extra dev isort --check-only .
+      - name: Black formatting
+        run: uv run --frozen --extra dev black --check .
+      - name: Import ordering
+        run: uv run --frozen --extra dev isort --check-only .
       - name: Typing (smoke)
         run: uv run --frozen --extra dev mypy --follow-imports=skip --disable-error-code no-any-return mac_messages_mcp/server.py
       - name: Build distributions
