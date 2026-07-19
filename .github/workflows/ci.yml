@@ -32,6 +32,34 @@ jobs:
       - name: Test
         run: uv run --frozen --extra dev --python ${{ matrix.python-version }} pytest
 
+  format-diagnostics:
+    name: Black (${{ matrix.path }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        path:
+          - main.py
+          - mac_messages_mcp/__init__.py
+          - mac_messages_mcp/messages.py
+          - mac_messages_mcp/server.py
+          - scripts/build_mcpb.py
+          - scripts/bump_version.py
+          - tests/test_attachments.py
+          - tests/test_fuzzy_search.py
+          - tests/test_integration.py
+          - tests/test_messages.py
+          - tests/test_timestamp_helpers.py
+          - tests/test_versioning.py
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: "0.9.25"
+          enable-cache: true
+      - name: Check file
+        run: uvx --from black==25.1.0 black --check "${{ matrix.path }}"
+
   quality-and-package:
     runs-on: macos-latest
     steps:
