@@ -1,0 +1,41 @@
+name: Bug report
+description: Report a problem with mac-messages-mcp
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the bug and what you expected to happen.
+      placeholder: A clear and concise bug description.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Include exact commands/config where possible.
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Compatibility details for this issue.
+      placeholder: |
+        - macOS:
+        - Python:
+        - MCP client (Claude Desktop/Cursor):
+        - Install method (PyPI/source/MCPB):
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / errors
+      description: Paste relevant output. Redact private message/contact data.

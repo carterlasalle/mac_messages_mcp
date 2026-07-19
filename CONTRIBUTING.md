@@ -12,7 +12,10 @@ uv sync --frozen --extra dev
 uv run pytest
 uv run black --check .
 uv run isort --check-only .
+uv run mypy --follow-imports=skip --disable-error-code no-any-return mac_messages_mcp/server.py
 uv build
+python scripts/build_mcpb.py --arch arm64
+python scripts/build_mcpb.py --arch x86_64
 ```
 
 Tests must not access a contributor's real Messages or Contacts data. Use temporary SQLite fixtures and mock AppleScript execution. Never commit database copies, phone numbers, contact exports, messages, or attachments.

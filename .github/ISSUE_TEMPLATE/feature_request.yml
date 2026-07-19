@@ -1,0 +1,29 @@
+name: Feature request
+description: Suggest an improvement to mac-messages-mcp
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: What workflow or limitation are you trying to improve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior you'd like.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Optional alternatives or workarounds you've tried.
+  - type: textarea
+    id: privacy
+    attributes:
+      label: Privacy / permissions impact
+      description: Note any expected changes to data access, returned fields, or permissions prompts.
