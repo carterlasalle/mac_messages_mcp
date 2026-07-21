@@ -8,9 +8,7 @@ from mac_messages_mcp.messages import query_addressbook_db, query_messages_db
 
 @patch("mac_messages_mcp.messages._connect_sqlite_readonly")
 @patch("mac_messages_mcp.messages.os.path.exists", return_value=True)
-@patch(
-    "mac_messages_mcp.messages.get_messages_db_path", return_value="/tmp/chat.db"
-)
+@patch("mac_messages_mcp.messages.get_messages_db_path", return_value="/tmp/chat.db")
 def test_query_messages_db_operational_error(_path, _exists, mock_connect):
     mock_connect.side_effect = sqlite3.OperationalError("permission denied")
 
