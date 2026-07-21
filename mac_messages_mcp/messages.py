@@ -780,6 +780,147 @@ def send_message(recipient: str, message: str, group_chat: bool = False) -> str:
 send_message.recent_matches = []
 
 
+APPLE_EPOCH_OFFSET = 978307200  # seconds between the unix epoch and 2001-01-01
+
+
+def _candidate_handles(recipient: str) -> List[str]:
+    """
+    Build the set of handle ids the Messages database might have recorded
+    for this recipient (email as-is; phone numbers in several formats).
+    """
+    if "@" in recipient:
+        return [recipient]
+    digits = normalize_phone_number(recipient)
+    candidates = {recipient.strip()}
+    if digits:
+        candidates.add(digits)
+        candidates.add("+" + digits)
+        candidates.update(_get_phone_formats(digits))
+    return [c for c in candidates if c]
+
+
+def _row_text(row: Dict[str, Any]) -> Optional[str]:
+    """Best-effort plain text for a message row (`text` column, else attributedBody)."""
+    text = row.get("text")
+    if text:
+        return text
+    return extract_body_from_attributed(row.get("attributedBody"))
+
+
+def _verify_send_in_db(
+    recipient: str,
+    sent_after_unix: float,
+    message_text: Optional[str] = None,
+    timeout: float = 6.0,
+) -> Optional[Dict[str, Any]]:
+    """
+    Poll the Messages database for the outbound message to `recipient`
+    recorded after `sent_after_unix`.
+
+    The AppleScript `send` command returns without error even when the
+    message later fails (e.g. error 22 for an unroutable handle, or a
+    recipient who deregistered from iMessage), so the AppleScript result
+    alone cannot confirm a send. The authoritative outcome lives in
+    chat.db's message.error / message.is_sent columns, which are populated
+    within a second or two of the attempt.
+
+    `sent_after_unix` alone is not a reliable correlation key: two sends to
+    the same handle close together (e.g. rapid-fire tool calls) can both be
+    "the latest row after time X" from either call's point of view, so a
+    plain `ORDER BY date DESC LIMIT 1` can report the outcome of the wrong
+    message. When `message_text` is given, matching rows are additionally
+    filtered by exact body match (decoding attributedBody when `text` is
+    NULL) so each call correlates to *its own* send rather than whichever
+    row happens to be newest. If nothing matches the body (e.g. Messages
+    re-encoded the text, or the row only has an attachment), we fall back to
+    the plain latest-row behavior rather than reporting a false negative.
+
+    Returns the row (guid, error, is_sent, is_delivered, service), or None
+    if no row could be read before the timeout (e.g. no Full Disk Access).
+    """
+    apple_ns = int((sent_after_unix - APPLE_EPOCH_OFFSET - 1) * 1_000_000_000)
+
+    def _matching_rows(handles: List[str]) -> List[Dict[str, Any]]:
+        placeholders = ", ".join("?" for _ in handles)
+        # m.error is aliased to send_error so a real row can't be mistaken
+        # for query_messages_db's {"error": ...} failure dict.
+        query = f"""
+            SELECT m.guid, m.error AS send_error, m.is_sent, m.is_delivered,
+                   m.service, m.text, m.attributedBody
+            FROM message m
+            JOIN handle h ON m.handle_id = h.ROWID
+            WHERE m.is_from_me = 1
+              AND h.id IN ({placeholders})
+              AND m.date >= ?
+            ORDER BY m.date DESC
+            LIMIT 10
+        """
+        results = query_messages_db(query, tuple(handles) + (apple_ns,))
+        if results and "guid" in results[0]:
+            return results
+        return []
+
+    def _best_row(handles: List[str]) -> Optional[Dict[str, Any]]:
+        rows = _matching_rows(handles)
+        if not rows:
+            return None
+        if message_text is not None:
+            for row in rows:
+                if _row_text(row) == message_text:
+                    return row
+            # No row's body matched this send -- fall back to the newest row
+            # rather than reporting nothing (e.g. attachment-only messages,
+            # or Messages normalizing the text on write).
+        return rows[0]
+
+    exact = [recipient.strip()]
+    variants = _candidate_handles(recipient)
+    deadline = time.time() + timeout
+    row = None
+    while time.time() < deadline:
+        # Prefer the exact handle the send targeted; only widen to format
+        # variants when the exact handle has no row (Messages sometimes
+        # records the handle in a different format than it was given).
+        row = _best_row(exact) or _best_row(variants)
+        if row is not None:
+            # Stop polling once the row resolves: an error code appears, or
+            # the message is marked sent. Otherwise keep waiting.
+            if row.get("send_error") or row.get("is_sent"):
+                return row
+        time.sleep(0.5)
+    return row
+
+
+def _report_send_outcome(
+    recipient: str,
+    display_name: str,
+    service: str,
+    sent_after_unix: float,
+    message_text: Optional[str] = None,
+) -> str:
+    """
+    Turn the database verification result into the string returned to the
+    caller. Never claims success for a message the database says failed.
+    """
+    row = _verify_send_in_db(recipient, sent_after_unix, message_text)
+    if row is None:
+        # Could not read the database (or the row never appeared); report
+        # honestly instead of claiming success.
+        return (
+            f"Message to {display_name} was handed to Messages.app via {service}, "
+            f"but delivery could not be verified in the Messages database."
+        )
+    actual_service = row.get("service") or service
+    if row.get("send_error"):
+        return (
+            f"Error: message to {display_name} failed to send "
+            f"(Messages error code {row['send_error']}, service {actual_service}). "
+            f"The recipient may not be reachable via {actual_service}."
+        )
+    status = "delivered" if row.get("is_delivered") else "sent"
+    return f"Message {status} successfully via {actual_service} to {display_name}"
+
+
 def _send_message_to_recipient(
     recipient: str, message: str, contact_name: str = None, group_chat: bool = False
 ) -> str:
@@ -817,6 +958,8 @@ def _send_message_to_recipient(
             # identifiers (raises -1728 "Can't get chat …").
             command = f'tell application "Messages" to send (read (POSIX file "{safe_file_path}") as «class utf8») to chat id "{safe_recipient}"'
 
+        sent_at = time.time()
+
         # Run the AppleScript
         result = run_applescript(command)
 
@@ -825,9 +968,14 @@ def _send_message_to_recipient(
             # Try fallback to direct method
             return _send_message_direct(recipient, message, contact_name, group_chat)
 
-        # Message sent successfully
+        # AppleScript accepted the send; confirm the outcome in the database
         display_name = contact_name if contact_name else recipient
-        return f"Message sent successfully to {display_name}"
+        if group_chat:
+            # Group chat ids can't be verified against a single handle
+            return f"Message sent successfully to {display_name}"
+        return _report_send_outcome(
+            recipient, display_name, "iMessage", sent_at, message
+        )
     except Exception as e:
         # Try fallback method
         return _send_message_direct(recipient, message, contact_name, group_chat)
@@ -1465,12 +1613,15 @@ def _send_message_sms(recipient: str, message: str, contact_name: str = None) ->
     """
 
     try:
+        sent_at = time.time()
         result = run_applescript(script)
         if result.startswith("error:"):
             return f"Error sending SMS: {result[6:]}"
         elif result.strip() == "success":
             display_name = contact_name if contact_name else recipient
-            return f"SMS sent successfully to {display_name}"
+            return _report_send_outcome(
+                recipient, display_name, "SMS", sent_at, message
+            )
         else:
             return f"Unknown SMS result: {result}"
     except Exception as e:
@@ -1588,17 +1739,24 @@ def _send_message_direct(
     """
 
     try:
+        sent_at = time.time()
         result = run_applescript(script)
         display_name = contact_name if contact_name else recipient
 
         if result.startswith("error:"):
             return f"Error sending message: {result[6:]}"
         elif result.strip() == "success:iMessage":
-            return f"Message sent successfully via iMessage to {display_name}"
+            return _report_send_outcome(
+                recipient, display_name, "iMessage", sent_at, message
+            )
         elif result.strip() == "success:SMS":
-            return f"Message sent successfully via SMS to {display_name} (iMessage not available)"
+            return _report_send_outcome(
+                recipient, display_name, "SMS", sent_at, message
+            )
         elif result.strip() == "success":
-            return f"Message sent successfully to {display_name}"
+            return _report_send_outcome(
+                recipient, display_name, "iMessage", sent_at, message
+            )
         else:
             return f"Unknown result: {result}"
     except Exception as e:
