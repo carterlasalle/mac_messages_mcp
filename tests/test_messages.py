@@ -364,7 +364,7 @@ class TestRecipientNormalization(unittest.TestCase):
     def test_send_message_rejects_short_phone_numbers(self, mock_send):
         result = send_message("12345", "hello")
 
-        self.assertIn("Phone recipients must be E.164-style", result)
+        self.assertIn("is not a usable phone number", result)
         mock_send.assert_not_called()
 
     @patch("mac_messages_mcp.messages.get_cached_contacts")

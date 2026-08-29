@@ -21,6 +21,7 @@ from thefuzz import fuzz
 from .phone import (
     canonical_handle,
     digits_only,
+    get_default_region,
     handle_variants,
     is_email_handle,
     to_e164,
@@ -761,7 +762,12 @@ def send_message(recipient: str, message: str, group_chat: bool = False) -> str:
     if _looks_like_phone_input(recipient):
         formatted_number = _format_phone_for_messages(recipient)
         if not formatted_number:
-            return "Error: Phone recipients must be E.164-style numbers with at least 10 digits, such as +14155551234."
+            return (
+                f"Error: '{recipient}' is not a usable phone number for region "
+                f"{get_default_region()}. Use an E.164 number such as "
+                "+14155551234, or set MAC_MESSAGES_REGION if your national "
+                "numbers belong to another region."
+            )
         return _send_message_to_recipient(formatted_number, message, group_chat=False)
 
     # Check if recipient is an email address
