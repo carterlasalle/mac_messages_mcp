@@ -267,6 +267,92 @@ def digits_only(value: str) -> str:
     return "".join(c for c in value if c.isdigit())
 
 
+def contact_key(value: str) -> str:
+    """
+    Return the key an address book entry is stored under in the contacts map.
+
+    Parameters
+    ----------
+    value : str
+        A phone number or email address as the address book holds it, which
+        may carry a trailing label, an extension, or be a short code.
+
+    Returns
+    -------
+    str
+        The canonical form when the value is a number this region can read,
+        otherwise its digits, otherwise the value itself. Never empty for a
+        non-empty input.
+
+    Notes
+    -----
+    An address book is not a source of well-formed numbers: it holds SMS short
+    codes, entries such as ``"555-0142 (work)"``, and foreign numbers saved
+    without their ``+``. Those cannot become E.164, and dropping them would
+    make the contact unreachable by name, so they keep a digits-only key —
+    which is what the whole map used before canonical keys existed.
+    Retrying the parse on the digits alone first recovers the entries whose
+    only problem was a label the parser choked on.
+    """
+    if not value:
+        return ""
+
+    canonical = canonical_handle(value)
+    if canonical:
+        return canonical
+
+    digits = digits_only(value)
+    if not digits:
+        return value.strip()
+
+    return canonical_handle(digits) or digits
+
+
+def lookup_keys(value: str) -> List[str]:
+    """
+    Return the contacts map keys a handle id may have been stored under.
+
+    Parameters
+    ----------
+    value : str
+        A ``handle.id`` from the Messages database.
+
+    Returns
+    -------
+    list of str
+        Candidate keys, most canonical first, without duplicates.
+
+    Notes
+    -----
+    The Messages database stores handles in E.164 while an address book entry
+    for the same person may be a short code, a bare national number, or a
+    foreign number saved without its ``+`` — all of which :func:`contact_key`
+    had to fall back to digits for. Offering the handle's national number and
+    bare digits alongside its canonical form is what lets the two sides meet.
+    The national number comes from the parsed number, not from stripping a
+    guessed country code.
+    """
+    keys: List[str] = []
+
+    def add(candidate: Optional[str]) -> None:
+        if candidate and candidate not in keys:
+            keys.append(candidate)
+
+    add(contact_key(value))
+    add(digits_only(value))
+
+    e164 = to_e164(value)
+    if e164:
+        try:
+            parsed = phonenumbers.parse(e164, None)
+        except phonenumbers.NumberParseException:
+            parsed = None
+        if parsed is not None and parsed.national_number is not None:
+            add(str(parsed.national_number))
+
+    return keys
+
+
 def handle_variants(value: str, region: Optional[str] = None) -> List[str]:
     """
     Build the handle ids the Messages database may have recorded for a recipient.

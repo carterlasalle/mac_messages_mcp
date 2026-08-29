@@ -20,10 +20,12 @@ from thefuzz import fuzz
 
 from .phone import (
     canonical_handle,
+    contact_key,
     digits_only,
     get_default_region,
     handle_variants,
     is_email_handle,
+    lookup_keys,
     to_e164,
 )
 
@@ -224,7 +226,15 @@ def _format_phone_for_messages(phone: str) -> str:
     configured for, so ``06 39 98 00 01`` becomes ``+33639980001`` in France
     and ``(555) 555-0142`` becomes ``+15555550142`` in the United States.
     Returns an empty string when the input is not a usable phone number.
+
+    Inputs of fewer than ten digits are refused regardless of what the parser
+    makes of them. Several numbering plans consider a short national form
+    possible, a seven-digit NANP local among them, so without this floor a
+    half-typed number would be expanded and handed to Messages.app instead of
+    being reported back to the caller.
     """
+    if len(digits_only(phone)) < 10:
+        return ""
     return to_e164(phone) or ""
 
 
@@ -235,7 +245,7 @@ def _looks_like_phone_input(value: str) -> bool:
     Accepts the separators people actually type, including the dots used in
     French national notation (``05.39.98.00.03``).
     """
-    return bool(value) and all(c.isdigit() or c in "+-. ()/" for c in value)
+    return bool(value) and all(c.isdigit() or c in "+-. ()" for c in value)
 
 
 # Global cache for contacts map
@@ -544,7 +554,9 @@ def process_contacts(contacts) -> Dict[str, str]:
             # Key the map on the canonical (E.164) form so a number stored as
             # "06 39 98 00 01" in the address book matches the "+33639980001"
             # handle the Messages database recorded for the same person.
-            normalized_phone = canonical_handle(phone)
+            # Short codes and entries the parser cannot read keep a digits-only
+            # key rather than being dropped from the map entirely.
+            normalized_phone = contact_key(phone)
             if normalized_phone:
                 contacts_map[normalized_phone] = full_name
 
@@ -628,7 +640,7 @@ def get_addressbook_contacts_subprocess() -> Dict[str, str]:
                     if not full_name.strip():
                         continue
 
-                    normalized_phone = canonical_handle(phone)
+                    normalized_phone = contact_key(phone)
                     if normalized_phone:
                         contacts_map[normalized_phone] = full_name
                 except json.JSONDecodeError:
@@ -1024,10 +1036,12 @@ def get_contact_name(handle_id: int) -> str:
 
     # Both sides of this comparison are canonical, so a handle recorded as
     # "+33639980001" matches an address book entry written "06 39 98 00 01"
-    # without having to enumerate country-code variations by hand.
-    canonical = canonical_handle(handle_id_value)
-    if canonical and canonical in contacts:
-        return contacts[canonical]
+    # without having to enumerate country-code variations by hand. The extra
+    # keys cover the address book entries that could not be canonicalized and
+    # so are stored under their digits.
+    for key in lookup_keys(handle_id_value):
+        if key in contacts:
+            return contacts[key]
 
     # If no match found in AddressBook, fall back to display name from chat
     contact_query = """
