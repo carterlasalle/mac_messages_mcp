@@ -149,6 +149,35 @@ def is_email_handle(value: str) -> bool:
 
 
 @lru_cache(maxsize=4096)
+def _parse_to_e164(value: str, region: str) -> Optional[str]:
+    """
+    Parse `value` against `region` and return its E.164 form, or None.
+
+    Parameters
+    ----------
+    value : str
+        A phone number in any format.
+    region : str
+        An explicit region code. Never ``None``, so the cache key always
+        carries the region the result was computed under and changing the
+        default region cannot serve a stale answer.
+
+    Returns
+    -------
+    str or None
+        The E.164 number, or ``None`` when the input is not one.
+    """
+    try:
+        parsed = phonenumbers.parse(value, region)
+    except phonenumbers.NumberParseException:
+        return None
+
+    if not phonenumbers.is_possible_number(parsed):
+        return None
+
+    return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
+
+
 def to_e164(value: str, region: Optional[str] = None) -> Optional[str]:
     """
     Convert a phone number written in any format to its E.164 representation.
@@ -176,22 +205,13 @@ def to_e164(value: str, region: Optional[str] = None) -> Optional[str]:
     would reject both freshly allocated ranges and the documentation ranges
     used in the tests.
 
-    Results are cached because handle lookups normalize the same numbers over
-    and over. Call ``to_e164.cache_clear()`` after changing the region, which
-    is what the tests do.
+    Results are cached, keyed on the resolved region, because handle lookups
+    normalize the same numbers over and over.
     """
     if not value or is_email_handle(value):
         return None
 
-    try:
-        parsed = phonenumbers.parse(value, region or get_default_region())
-    except phonenumbers.NumberParseException:
-        return None
-
-    if not phonenumbers.is_possible_number(parsed):
-        return None
-
-    return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
+    return _parse_to_e164(value, region or get_default_region())
 
 
 def canonical_handle(value: str, region: Optional[str] = None) -> Optional[str]:

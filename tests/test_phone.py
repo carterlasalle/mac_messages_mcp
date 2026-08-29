@@ -24,10 +24,11 @@ from mac_messages_mcp.phone import (
 def region_pinned(region=None, clear_locale_env=False):
     """Temporarily control the environment get_default_region() reads.
 
-    Both get_default_region and to_e164 are @lru_cache'd, so changing the
-    environment alone is not enough: their caches must be cleared before and
-    after the change or a value cached under a previous region would leak
-    into (or out of) this test.
+    get_default_region is @lru_cache'd, so changing the environment alone is
+    not enough: its cache must be cleared before and after the change or the
+    region resolved by an earlier test would leak into this one. The parse
+    cache underneath to_e164 is keyed on the resolved region, so it needs no
+    clearing.
 
     Args:
         region: Value to set MAC_MESSAGES_REGION to. None leaves it untouched.
@@ -44,13 +45,11 @@ def region_pinned(region=None, clear_locale_env=False):
         if region is not None:
             os.environ[REGION_ENV_VAR] = region
         get_default_region.cache_clear()
-        to_e164.cache_clear()
         yield
     finally:
         os.environ.clear()
         os.environ.update(env_backup)
         get_default_region.cache_clear()
-        to_e164.cache_clear()
 
 
 class TestToE164(unittest.TestCase):
