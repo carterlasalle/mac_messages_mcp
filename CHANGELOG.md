@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- Phone numbers written in national format are now expanded to E.164 against the region the Mac is configured for instead of being assumed North American. A French number such as `06 39 98 00 01` was previously turned into `+10639980001`, which made contact listings show the wrong country code and made message lookups, attachment lookups and iMessage availability checks miss handles that exist in the database.
+- Handle matching now compares numbers on their canonical E.164 form, so an E.164 input finds a handle stored in national format and the reverse. Lookups that find nothing through the indexed query fall back to a canonical scan of the handle table.
+- `_looks_like_phone_input` accepts dot separators, so `05.39.98.00.03` is treated as a phone number rather than a contact name.
+
+### Added
+- Added `MAC_MESSAGES_REGION` to override the region national-format numbers are parsed against, for Macs configured for a different region than their phone numbers belong to.
+- Added `phonenumbers` as a dependency, replacing the hand-rolled country-code heuristics.
+
 ## [1.0.0] - 2026-07-18
 
 ### Added

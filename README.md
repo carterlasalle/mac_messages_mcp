@@ -264,9 +264,15 @@ For direct messages, E.164 phone numbers are the most reliable format:
 +14155551234
 ```
 
-The server normalizes bare numbers with a country code and converts 10-digit US
-numbers to `+1...`. It also accepts email addresses, contact names, and
-`contact:N` selections returned after an ambiguous contact search.
+Numbers written in national format work too. They are expanded to E.164 using
+the region your Mac is configured for, so `(415) 555-1234` becomes
+`+14155551234` on a US Mac and `06 39 98 00 01` becomes `+33639980001` on a
+French one. Set `MAC_MESSAGES_REGION` to an ISO 3166-1 alpha-2 code
+(`MAC_MESSAGES_REGION=GB`) when your numbers belong to a different region than
+your Mac does. Numbers already in E.164 are never reinterpreted.
+
+The server also accepts email addresses, contact names, and `contact:N`
+selections returned after an ambiguous contact search.
 
 For a group conversation, call `tool_get_chats`, pass its chat ID to
 `tool_send_message`, and set `group_chat=true`. Use the same ID as `chat_id` in
@@ -330,6 +336,11 @@ the ChatGPT desktop app itself.
 Allow the launching app to access Contacts if macOS prompts. Confirm Full Disk
 Access, restart the app, and call `tool_check_addressbook` followed by
 `tool_check_contacts`.
+
+If contacts are listed but their numbers carry the wrong country code, the
+server is expanding your national-format numbers against the wrong region. Set
+`MAC_MESSAGES_REGION` to the right ISO 3166-1 alpha-2 code and restart the
+server.
 
 ### Reading works but sending fails
 
