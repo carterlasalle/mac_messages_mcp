@@ -19,6 +19,7 @@ from mac_messages_mcp.messages import (
     escape_applescript,
     extract_body_from_attributed,
     find_contact_by_name,
+    find_handles_by_phone,
     get_chat_mapping,
     get_messages_db_path,
     get_recent_messages,
@@ -26,6 +27,7 @@ from mac_messages_mcp.messages import (
     run_applescript,
     send_message,
 )
+from tests.test_phone import region_pinned
 
 
 class TestMessages(unittest.TestCase):
@@ -339,16 +341,21 @@ class TestRecipientNormalization(unittest.TestCase):
         self.assertEqual(_format_phone_for_messages("+19565179045"), "+19565179045")
 
     def test_phone_formatter_adds_plus_to_country_code_digits(self):
-        self.assertEqual(_format_phone_for_messages("19565179045"), "+19565179045")
+        with region_pinned("US"):
+            self.assertEqual(_format_phone_for_messages("19565179045"), "+19565179045")
 
-    def test_phone_formatter_assumes_us_country_code_for_ten_digits(self):
-        self.assertEqual(_format_phone_for_messages("(956) 517-9045"), "+19565179045")
+    def test_phone_formatter_expands_ten_digits_against_configured_region(self):
+        with region_pinned("US"):
+            self.assertEqual(
+                _format_phone_for_messages("(956) 517-9045"), "+19565179045"
+            )
 
     @patch("mac_messages_mcp.messages._send_message_to_recipient")
     def test_send_message_normalizes_bare_digits_before_dispatch(self, mock_send):
         mock_send.return_value = "sent"
 
-        result = send_message("19565179045", "hello")
+        with region_pinned("US"):
+            result = send_message("19565179045", "hello")
 
         self.assertEqual(result, "sent")
         mock_send.assert_called_once_with("+19565179045", "hello", group_chat=False)
@@ -362,11 +369,12 @@ class TestRecipientNormalization(unittest.TestCase):
 
     @patch("mac_messages_mcp.messages.get_cached_contacts")
     def test_find_contact_returns_messages_ready_phone_number(self, mock_contacts):
-        mock_contacts.return_value = {"19565179045": "Hugo Example"}
+        # The contacts map is keyed on canonical E.164 form.
+        mock_contacts.return_value = {"+19565179045": "Hugo Example"}
         with patch.dict(
             "mac_messages_mcp.messages._PHONE_TO_DETAILS_MAP",
             {
-                "19565179045": {
+                "+19565179045": {
                     "first_name": "Hugo",
                     "last_name": "Example",
                     "nickname": "",
@@ -800,10 +808,69 @@ class TestCandidateHandles(unittest.TestCase):
     def test_candidate_handles_us_number(self):
         from mac_messages_mcp.messages import _candidate_handles
 
-        handles = _candidate_handles("6058813494")
+        with region_pinned("US"):
+            handles = _candidate_handles("6058813494")
+
         self.assertIn("6058813494", handles)
         self.assertIn("+16058813494", handles)
         self.assertIn("16058813494", handles)
+
+
+class TestFindHandlesByPhone(unittest.TestCase):
+    """Tests for find_handles_by_phone matching a phone number to stored handle ids."""
+
+    @patch("mac_messages_mcp.messages.query_messages_db")
+    def test_e164_input_matches_handle_stored_as_e164(self, mock_query_db):
+        """An E.164 input finds a handle whose stored id is exactly that E.164 form."""
+        mock_query_db.return_value = [{"ROWID": 1}]
+
+        with region_pinned("FR"):
+            result = find_handles_by_phone("+33639980001")
+
+        self.assertEqual(result, [1])
+
+    @patch("mac_messages_mcp.messages.query_messages_db")
+    def test_national_input_finds_same_handle_under_configured_region(
+        self, mock_query_db
+    ):
+        """A national-format input under region FR finds the same E.164 handle."""
+        mock_query_db.return_value = [{"ROWID": 2}]
+
+        with region_pinned("FR"):
+            result = find_handles_by_phone("06 39 98 00 01")
+
+        self.assertEqual(result, [2])
+
+    @patch("mac_messages_mcp.messages.query_messages_db")
+    def test_falls_back_to_canonical_scan_when_indexed_lookup_finds_nothing(
+        self, mock_query_db
+    ):
+        """When the WHERE id IN (...) lookup misses, a full-table canonical scan still matches."""
+        mock_query_db.side_effect = [
+            [],  # indexed lookup on the predicted variant spellings: no match
+            [
+                {"ROWID": 3, "id": "0639980001"},  # same number, different spelling
+                {"ROWID": 4, "id": "+15555550142"},
+            ],
+        ]
+
+        with region_pinned("FR"):
+            result = find_handles_by_phone("+33639980001")
+
+        self.assertEqual(result, [3])
+
+    @patch("mac_messages_mcp.messages.query_messages_db")
+    def test_no_match_returns_none(self, mock_query_db):
+        """When no stored handle reduces to the same canonical number, None is returned."""
+        mock_query_db.side_effect = [
+            [],
+            [{"ROWID": 4, "id": "+15555550142"}],
+        ]
+
+        with region_pinned("FR"):
+            result = find_handles_by_phone("+33639980001")
+
+        self.assertIsNone(result)
 
 
 if __name__ == "__main__":
