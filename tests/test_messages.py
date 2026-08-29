@@ -21,8 +21,10 @@ from mac_messages_mcp.messages import (
     find_contact_by_name,
     find_handles_by_phone,
     get_chat_mapping,
+    get_contact_name,
     get_messages_db_path,
     get_recent_messages,
+    process_contacts,
     query_messages_db,
     run_applescript,
     send_message,
@@ -362,6 +364,39 @@ class TestRecipientNormalization(unittest.TestCase):
             self.assertEqual(
                 _format_phone_for_messages("(956) 517-9045"), "+19565179045"
             )
+
+    def test_phone_formatter_rejects_seven_digit_local_under_floor(self):
+        """Fewer than ten digits are refused even when the region calls them possible.
+
+        Regression: `is_possible_number` is region-relative and accepts a
+        seven-digit NANP local under US, so without an explicit floor a
+        half-typed number such as "555-0142" was expanded to "+15550142"
+        and handed to Messages.app instead of being reported back to the
+        caller.
+        """
+        with region_pinned("US"):
+            self.assertEqual(_format_phone_for_messages("555-0142"), "")
+            self.assertEqual(_format_phone_for_messages("5550142"), "")
+
+    def test_phone_formatter_rejects_nine_digit_number_under_fr(self):
+        """A nine-digit number is refused for being under the ten-digit floor."""
+        with region_pinned("FR"):
+            self.assertEqual(_format_phone_for_messages("123456789"), "")
+
+    def test_phone_formatter_floor_does_not_reject_legitimate_numbers(self):
+        """The ten-digit floor still accepts legitimate national and E.164 numbers."""
+        with region_pinned("FR"):
+            self.assertEqual(_format_phone_for_messages("0639980001"), "+33639980001")
+            self.assertEqual(_format_phone_for_messages("+33639980001"), "+33639980001")
+
+    @patch("mac_messages_mcp.messages._send_message_to_recipient")
+    def test_send_message_rejects_seven_digit_local_under_floor(self, mock_send):
+        """send_message reports the guard error instead of dispatching a half-typed number."""
+        with region_pinned("US"):
+            result = send_message("555-0142", "hello")
+
+        self.assertIn("is not a usable phone number", result)
+        mock_send.assert_not_called()
 
     @patch("mac_messages_mcp.messages._send_message_to_recipient")
     def test_send_message_normalizes_bare_digits_before_dispatch(self, mock_send):
@@ -892,6 +927,48 @@ class TestFindHandlesByPhone(unittest.TestCase):
             result = find_handles_by_phone("+33639980001")
 
         self.assertIsNone(result)
+
+
+class TestAddressBookShortCodeRegression(unittest.TestCase):
+    """Tests that an unparseable address book entry stays reachable (regression: H1).
+
+    process_contacts used to key the contacts map on canonical_handle(phone)
+    under an `if`, so any entry phonenumbers could not parse, an SMS short
+    code among them, was silently dropped. It now keys on contact_key, which
+    falls back to digits, and get_contact_name looks the handle up through
+    lookup_keys so both sides stay symmetric.
+    """
+
+    def test_process_contacts_keeps_short_code_entry(self):
+        """A contact whose only number is an SMS short code is kept in the map."""
+        contacts = [
+            {
+                "first_name": "Hugo",
+                "last_name": "Example",
+                "nickname": "",
+                "phone": "55501",
+                "email": "",
+            }
+        ]
+
+        with region_pinned("FR"):
+            contacts_map = process_contacts(contacts)
+
+        self.assertEqual(contacts_map.get("55501"), "Hugo Example")
+
+    @patch("mac_messages_mcp.messages.get_cached_contacts")
+    @patch("mac_messages_mcp.messages.query_messages_db")
+    def test_get_contact_name_resolves_short_code_handle(
+        self, mock_query_db, mock_contacts
+    ):
+        """get_contact_name resolves a handle stored as a short code, through lookup_keys."""
+        mock_query_db.return_value = [{"id": "55501"}]
+        mock_contacts.return_value = {"55501": "Hugo Example"}
+
+        with region_pinned("FR"):
+            name = get_contact_name(1)
+
+        self.assertEqual(name, "Hugo Example")
 
 
 if __name__ == "__main__":

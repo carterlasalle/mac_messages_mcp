@@ -12,10 +12,12 @@ from mac_messages_mcp.phone import (
     REGION_ENV_VAR,
     _region_from_locale,
     canonical_handle,
+    contact_key,
     digits_only,
     get_default_region,
     handle_variants,
     is_email_handle,
+    lookup_keys,
     to_e164,
 )
 
@@ -152,6 +154,83 @@ class TestHandleVariants(unittest.TestCase):
         variants = handle_variants("Hugo@Example.com")
 
         self.assertEqual(variants, ["hugo@example.com", "Hugo@Example.com"])
+
+
+class TestContactKey(unittest.TestCase):
+    """Tests for contact_key, the address book map key (regression: H1)."""
+
+    def test_short_code_never_reduces_to_empty(self):
+        """An SMS short code cannot be canonicalized but keeps a non-empty key."""
+        with region_pinned("FR"):
+            self.assertEqual(contact_key("55501"), "55501")
+
+    def test_labelled_entry_never_reduces_to_empty(self):
+        """An entry with a trailing label cannot be canonicalized but keeps a key."""
+        with region_pinned("US"):
+            self.assertTrue(contact_key("+33 6 39 98 00 01 (work)"))
+
+    def test_foreign_number_without_plus_never_reduces_to_empty(self):
+        """A foreign number saved without its '+' still keeps a non-empty key."""
+        with region_pinned("FR"):
+            self.assertEqual(contact_key("15555550142"), "15555550142")
+
+    def test_normal_national_number_reduces_to_canonical_form(self):
+        """A well-formed national number still reduces to its canonical form."""
+        with region_pinned("FR"):
+            self.assertEqual(contact_key("0639980001"), "+33639980001")
+
+    def test_already_e164_number_reduces_to_itself(self):
+        """An already-E.164 number reduces to itself."""
+        with region_pinned("FR"):
+            self.assertEqual(contact_key("+33639980001"), "+33639980001")
+
+    def test_email_reduces_to_lowercased_form(self):
+        """An email address reduces to its canonical (lowercased) form."""
+        self.assertEqual(contact_key("Hugo@Example.com"), "hugo@example.com")
+
+    def test_labelled_entry_recovers_canonical_form_from_its_digits(self):
+        """The digits alone still parse even though the labelled string does not.
+
+        This is the regression case called out in the fix: under region FR,
+        an address book entry such as "06 39 98 00 01 (work)" used to be
+        dropped from the contacts map entirely because canonical_handle could
+        not parse the trailing label. contact_key now retries on the digits
+        alone and recovers the canonical form.
+        """
+        with region_pinned("FR"):
+            self.assertEqual(contact_key("06 39 98 00 01 (work)"), "+33639980001")
+
+
+class TestContactKeyLookupKeysSymmetry(unittest.TestCase):
+    """Tests that contact_key and lookup_keys meet on the same key (regression: H1).
+
+    process_contacts keys the contacts map on contact_key(book_entry), and
+    get_contact_name looks a handle id up through lookup_keys(handle_id). For
+    the fix to work both sides must agree on at least one key for the same
+    person, however differently the address book and the Messages database
+    happened to spell their number.
+    """
+
+    def test_labelled_national_entry_matches_e164_handle(self):
+        """A labelled FR national entry matches an E.164-stored handle."""
+        with region_pinned("FR"):
+            self.assertIn(
+                contact_key("06 39 98 00 01 (work)"),
+                lookup_keys("+33639980001"),
+            )
+
+    def test_foreign_number_without_plus_matches_e164_handle(self):
+        """A foreign number saved without '+' matches its E.164-stored handle."""
+        with region_pinned("FR"):
+            self.assertIn(
+                contact_key("15555550142"),
+                lookup_keys("+15555550142"),
+            )
+
+    def test_short_code_matches_itself(self):
+        """A short code stored identically on both sides matches."""
+        with region_pinned("FR"):
+            self.assertIn(contact_key("55501"), lookup_keys("55501"))
 
 
 class TestGetDefaultRegion(unittest.TestCase):
