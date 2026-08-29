@@ -340,6 +340,19 @@ class TestRecipientNormalization(unittest.TestCase):
     def test_phone_formatter_preserves_e164_plus(self):
         self.assertEqual(_format_phone_for_messages("+19565179045"), "+19565179045")
 
+    def test_phone_formatter_does_not_assume_north_america(self):
+        """A ten-digit national number takes its own region's country code, not +1."""
+        with region_pinned("FR"):
+            self.assertEqual(_format_phone_for_messages("0639980001"), "+33639980001")
+            self.assertEqual(
+                _format_phone_for_messages("05 39 98 00 03"), "+33539980003"
+            )
+
+    def test_phone_formatter_keeps_foreign_e164_intact(self):
+        """An E.164 number is never reinterpreted against the configured region."""
+        with region_pinned("US"):
+            self.assertEqual(_format_phone_for_messages("+33639980001"), "+33639980001")
+
     def test_phone_formatter_adds_plus_to_country_code_digits(self):
         with region_pinned("US"):
             self.assertEqual(_format_phone_for_messages("19565179045"), "+19565179045")
@@ -821,25 +834,32 @@ class TestFindHandlesByPhone(unittest.TestCase):
 
     @patch("mac_messages_mcp.messages.query_messages_db")
     def test_e164_input_matches_handle_stored_as_e164(self, mock_query_db):
-        """An E.164 input finds a handle whose stored id is exactly that E.164 form."""
+        """An E.164 input searches for the E.164 spelling the handle is stored under."""
         mock_query_db.return_value = [{"ROWID": 1}]
 
         with region_pinned("FR"):
             result = find_handles_by_phone("+33639980001")
 
         self.assertEqual(result, [1])
+        # The regression: the "+" used to be stripped before the lookup, so the
+        # query asked for "33639980001" and never matched "+33639980001".
+        self.assertIn("+33639980001", mock_query_db.call_args[0][1])
 
     @patch("mac_messages_mcp.messages.query_messages_db")
     def test_national_input_finds_same_handle_under_configured_region(
         self, mock_query_db
     ):
-        """A national-format input under region FR finds the same E.164 handle."""
+        """A national-format input under region FR searches for the FR E.164 spelling."""
         mock_query_db.return_value = [{"ROWID": 2}]
 
         with region_pinned("FR"):
             result = find_handles_by_phone("06 39 98 00 01")
 
         self.assertEqual(result, [2])
+        searched = mock_query_db.call_args[0][1]
+        self.assertIn("+33639980001", searched)
+        # It must not have been read as a North American number.
+        self.assertNotIn("+10639980001", searched)
 
     @patch("mac_messages_mcp.messages.query_messages_db")
     def test_falls_back_to_canonical_scan_when_indexed_lookup_finds_nothing(
