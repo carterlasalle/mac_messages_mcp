@@ -375,7 +375,8 @@ class TestRecipientNormalization(unittest.TestCase):
 
     @patch("mac_messages_mcp.messages._send_message_to_recipient")
     def test_send_message_rejects_short_phone_numbers(self, mock_send):
-        result = send_message("12345", "hello")
+        with region_pinned("US"):
+            result = send_message("12345", "hello")
 
         self.assertIn("is not a usable phone number", result)
         mock_send.assert_not_called()
