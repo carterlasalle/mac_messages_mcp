@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Phone numbers written in national format are now expanded to E.164 against the region the Mac is configured for instead of being assumed North American. A French number such as `06 39 98 00 01` was previously turned into `+10639980001`, which made contact listings show the wrong country code and made message lookups, attachment lookups and iMessage availability checks miss handles that exist in the database.
 - Handle matching now compares numbers on their canonical E.164 form, so an E.164 input finds a handle stored in national format and the reverse. Lookups that find nothing through the indexed query fall back to a canonical scan of the handle table.
 - `_looks_like_phone_input` accepts dot separators, so `05.39.98.00.03` is treated as a phone number rather than a contact name.
+- Address book entries whose number cannot be read as a phone number, such as SMS short codes, entries carrying a trailing label, and foreign numbers saved without their `+`, keep a digits-only key instead of being dropped from the contacts map. Contact name resolution looks up the canonical form, the digits, and the national number, so both sides of the comparison meet whichever form the entry was stored under.
+- Recipients of fewer than ten digits are refused again. Several numbering plans consider a short national form possible, a seven-digit North American local among them, so a half-typed number was being expanded and handed to Messages.app.
 
 ### Added
 - Added `MAC_MESSAGES_REGION` to override the region national-format numbers are parsed against, for Macs configured for a different region than their phone numbers belong to.
