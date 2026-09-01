@@ -181,8 +181,11 @@ class TestEscapeAppleScriptInjection(unittest.TestCase):
 class TestSanitizeMessageBody(unittest.TestCase):
     """Tests for MCP-safe message rendering."""
 
-    def test_control_characters_are_removed(self):
-        self.assertEqual(_sanitize_message_body("hello\x00there\x07"), "hello there ")
+    def test_control_characters_are_neutralized(self):
+        result = _sanitize_message_body("hello\x00there\x07")
+        self.assertEqual(result, "hello\\u0000there\\u0007")
+        self.assertNotIn("\x00", result)
+        self.assertNotIn("\x07", result)
 
     def test_newlines_are_rendered_inline(self):
         self.assertEqual(_sanitize_message_body("line 1\nline 2"), "line 1\\nline 2")

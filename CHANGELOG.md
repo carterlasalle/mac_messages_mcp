@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- Messages/Contacts-derived MCP tool and resource output is structurally neutralized and returned in an explicit `<untrusted-mcp-output>` block. Embedded newlines cannot form extra transcript lines; invisible, format, and bidi characters are shown as escapes. This is not an anti-injection guarantee. Fence idempotence is an in-process marker, so attacker text that only *looks* fenced is still re-serialized.
+- CodeQL workflow pins actions to commit SHAs and analyzes Python with `security-extended` queries. Dependabot is configured for the `uv` and `github-actions` ecosystems.
+
 ### Fixed
 - Phone numbers written in national format are now expanded to E.164 against the region the Mac is configured for instead of being assumed North American. A French number such as `06 39 98 00 01` was previously turned into `+10639980001`, which made contact listings show the wrong country code and made message lookups, attachment lookups and iMessage availability checks miss handles that exist in the database.
 - Handle matching now compares numbers on their canonical E.164 form, so an E.164 input finds a handle stored in national format and the reverse. Lookups that find nothing through the indexed query fall back to a canonical scan of the handle table.

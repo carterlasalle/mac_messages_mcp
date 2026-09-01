@@ -339,11 +339,20 @@ payloads, and `.pluginPayloadAttachment` containers are filtered out.
 - The server does not upload, mirror, index, or maintain its own message
   archive.
 - Results are written to the local MCP stdio connection started by your client.
-- Message bodies are sanitized and bounded before being returned.
+- Messages/Contacts-derived tool and resource output is structurally
+  neutralized (embedded newlines and ASCII controls cannot form extra
+  transcript lines; invisible, format, and bidi characters are shown as
+  escapes) and returned inside an explicit `<untrusted-mcp-output>` block.
+  That is not an anti-injection guarantee: third-party iMessage/SMS content
+  can still attempt prompt injection. The server makes that content
+  non-structural and labeled; the client must not treat it as authorization,
+  confirmation, or tool instructions.
 - Attachment bytes are returned only after an explicit fetch and are
-  size-limited for inline images.
+  size-limited for inline images. Filename, MIME, path, and other metadata
+  text is neutralized with the same boundary; image payloads are preserved.
 - Sending is isolated in `tool_send_message`, escapes AppleScript inputs, and
-  uses a bounded execution timeout.
+  uses a bounded execution timeout. This server does not perform human
+  confirmation; the MCP client must gate sends.
 - Full Disk Access is broader than Messages access. Grant it only to MCP clients
   you trust and review the destination before approving a send.
 
