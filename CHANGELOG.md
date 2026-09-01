@@ -7,9 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-09-01
+
 ### Security
-- Messages/Contacts-derived MCP tool and resource output is structurally neutralized and returned in an explicit `<untrusted-mcp-output>` block. Embedded newlines cannot form extra transcript lines; invisible, format, and bidi characters are shown as escapes. This is not an anti-injection guarantee. Fence idempotence is an in-process marker, so attacker text that only *looks* fenced is still re-serialized.
-- CodeQL workflow pins actions to commit SHAs and analyzes Python with `security-extended` queries. Dependabot is configured for the `uv` and `github-actions` ecosystems.
+- MCP tool and resource output derived from Messages and Contacts is serialized at a single untrusted-output boundary (`present_untrusted_output`). Newlines become the literal two-character sequence `\n`; invisible, bidi, and format Unicode is escaped; fence terminators inside content are defanged; and the payload is wrapped in `<untrusted-mcp-output>` so it is not treated as instructions. Fence idempotence uses an in-process marker, so attacker text that only looks already-fenced is still re-serialized. This is not an anti-injection guarantee.
+- Clients must still gate `tool_send_message`. The locked `mcp` 1.3.0 FastMCP API has no elicitation, and a `confirm=True` argument is not human confirmation.
+- Coordinated reports from Grégoire Compagnon (obeone) prompted this output-boundary work.
+- CodeQL actions are pinned to commit SHAs and analyze Python with `security-extended` queries. Dependabot covers the `uv` and `github-actions` ecosystems. A Semgrep OSS scan (`semgrep scan` in the official `semgrep/semgrep` image) replaced the unused GitHub-starter Semgrep workflow that required `SEMGREP_APP_TOKEN`.
+
+### Added
+- Added `MAC_MESSAGES_REGION` to override the region used when parsing national-format numbers, for Macs configured for a different region than their phone numbers belong to.
+- Added `phonenumbers` as a dependency, replacing the hand-rolled country-code heuristics.
 
 ### Fixed
 - Phone numbers written in national format are now expanded to E.164 against the region the Mac is configured for instead of being assumed North American. A French number such as `06 39 98 00 01` was previously turned into `+10639980001`, which made contact listings show the wrong country code and made message lookups, attachment lookups and iMessage availability checks miss handles that exist in the database.
@@ -20,10 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Email handles are compared case-insensitively on both sides, so an address stored in mixed case is found whichever way it is typed.
 - Email addresses are looked up as handles instead of being sent to fuzzy contact-name matching, which answered "No contacts found" for any address that is not in the address book and returned before the handle query could run.
 - Recipients are refused for being dialable only from inside their own local area rather than for having fewer than ten digits. The digit floor rejected every numbering plan shorter than the North American one, an eight-digit Norwegian number among them, while still letting through the seven-digit North American local form it was meant to catch. Several numbering plans consider a short national form possible, a seven-digit North American local among them, so a half-typed number was being expanded and handed to Messages.app.
+- Credit: Grégoire Compagnon (obeone) for the region-aware phone and email handle work ([#64](https://github.com/carterlasalle/mac_messages_mcp/pull/64)).
 
-### Added
-- Added `MAC_MESSAGES_REGION` to override the region national-format numbers are parsed against, for Macs configured for a different region than their phone numbers belong to.
-- Added `phonenumbers` as a dependency, replacing the hand-rolled country-code heuristics.
+### Changed
+- Upgraded Pillow from 12.2.0 to 12.3.0.
+- Updated indirect dependencies: python-dotenv 1.2.2, idna 3.15, and pygments 2.20.0.
+- GitHub Actions: `actions/checkout` v7.0.1 (SHA-pinned), `astral-sh/setup-uv` v10, and `pypa/gh-action-pypi-publish` 1.14.2.
+- CI jobs now set `timeout-minutes` so a stuck macOS runner acquire fails closed.
 
 ## [1.0.0] - 2026-07-18
 
