@@ -175,9 +175,17 @@ jobs:
               item["filename"]: item["digests"]["sha256"]
               for item in payload.get("urls", [])
           }
-          local_files = sorted(Path("dist").iterdir())
-          if not local_files:
-              raise SystemExit("No local distributions were built")
+          local_files = sorted(
+              path
+              for path in Path("dist").iterdir()
+              if path.is_file() and path.name.endswith((".whl", ".tar.gz"))
+          )
+          wheels = [path for path in local_files if path.name.endswith(".whl")]
+          sdists = [path for path in local_files if path.name.endswith(".tar.gz")]
+          if not wheels:
+              raise SystemExit("No local wheel was built")
+          if not sdists:
+              raise SystemExit("No local sdist was built")
           for path in local_files:
               digest = hashlib.sha256(path.read_bytes()).hexdigest()
               if path.name not in remote:
