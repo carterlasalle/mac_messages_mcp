@@ -229,6 +229,8 @@ jobs:
           TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch --tags --force
           if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
             TAG_SHA="$(git rev-list -n 1 "${TAG}")"
