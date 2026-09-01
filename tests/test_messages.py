@@ -366,32 +366,41 @@ class TestRecipientNormalization(unittest.TestCase):
                 _format_phone_for_messages("(956) 517-9045"), "+19565179045"
             )
 
-    def test_phone_formatter_rejects_seven_digit_local_under_floor(self):
-        """Fewer than ten digits are refused even when the region calls them possible.
+    def test_phone_formatter_rejects_locally_dialable_form(self):
+        """A number dialable only from inside its own area is refused, not expanded.
 
         Regression: `is_possible_number` is region-relative and accepts a
-        seven-digit NANP local under US, so without an explicit floor a
-        half-typed number such as "555-0142" was expanded to "+15550142"
-        and handed to Messages.app instead of being reported back to the
-        caller.
+        seven-digit NANP local under US, so a half-typed number such as
+        "555-0142" was expanded to "+15550142" and handed to Messages.app
+        instead of being reported back to the caller.
         """
         with region_pinned("US"):
             self.assertEqual(_format_phone_for_messages("555-0142"), "")
             self.assertEqual(_format_phone_for_messages("5550142"), "")
 
-    def test_phone_formatter_rejects_nine_digit_number_under_fr(self):
-        """A nine-digit number is refused for being under the ten-digit floor."""
-        with region_pinned("FR"):
-            self.assertEqual(_format_phone_for_messages("123456789"), "")
+    def test_phone_formatter_accepts_national_plans_shorter_than_ten_digits(self):
+        """A number is judged by its numbering plan, not by a ten-digit floor.
 
-    def test_phone_formatter_floor_does_not_reject_legitimate_numbers(self):
-        """The ten-digit floor still accepts legitimate national and E.164 numbers."""
+        Regression: the floor that refused the seven-digit local above was a
+        digit count, so it also refused every country whose numbers are
+        shorter than the North American ten. Norwegian numbers are eight
+        digits and were rejected outright.
+        """
+        with region_pinned("NO"):
+            self.assertEqual(_format_phone_for_messages("22 82 30 00"), "+4722823000")
+        with region_pinned("FR"):
+            # Nine digits, a legitimate Paris landline in national significant
+            # form, refused by the same floor.
+            self.assertEqual(_format_phone_for_messages("123456789"), "+33123456789")
+
+    def test_phone_formatter_accepts_legitimate_national_and_e164_numbers(self):
+        """Ordinary national and E.164 input is unaffected by the local-form check."""
         with region_pinned("FR"):
             self.assertEqual(_format_phone_for_messages("0639980001"), "+33639980001")
             self.assertEqual(_format_phone_for_messages("+33639980001"), "+33639980001")
 
     @patch("mac_messages_mcp.messages._send_message_to_recipient")
-    def test_send_message_rejects_seven_digit_local_under_floor(self, mock_send):
+    def test_send_message_rejects_locally_dialable_form(self, mock_send):
         """send_message reports the guard error instead of dispatching a half-typed number."""
         with region_pinned("US"):
             result = send_message("555-0142", "hello")
@@ -964,6 +973,26 @@ class TestEmailHandleCaseFolding(unittest.TestCase):
         # Without COLLATE NOCASE this only works when the stored id happens to
         # be lowercase too.
         self.assertIn("COLLATE NOCASE", mock_query_db.call_args[0][0])
+
+    @patch("mac_messages_mcp.messages.find_contact_by_name")
+    @patch("mac_messages_mcp.messages.query_messages_db")
+    def test_address_is_not_routed_through_name_matching(
+        self, mock_query_db, mock_find_by_name
+    ):
+        """An address reaches the handle lookup instead of fuzzy name matching.
+
+        An address contains letters, so the guard that separates names from
+        numbers sent it to find_contact_by_name, which answered "No contacts
+        found" for anyone whose address is not in the address book and
+        returned before the handle query could run.
+        """
+        mock_query_db.return_value = []
+        mock_find_by_name.return_value = []
+
+        result = get_recent_messages(hours=1, contact="hugo.example@example.com")
+
+        mock_find_by_name.assert_not_called()
+        self.assertNotIn("No contacts found", result)
 
 
 class TestAddressBookShortCodeRegression(unittest.TestCase):

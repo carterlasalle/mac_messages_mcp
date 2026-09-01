@@ -173,9 +173,9 @@ def is_email_handle(value: str) -> bool:
 
 
 @lru_cache(maxsize=4096)
-def _parse_to_e164(value: str, region: str) -> Optional[str]:
+def _parse(value: str, region: str) -> Optional[phonenumbers.PhoneNumber]:
     """
-    Parse `value` against `region` and return its E.164 form, or None.
+    Parse `value` against `region`, or return None when it is not a number.
 
     Parameters
     ----------
@@ -188,18 +188,14 @@ def _parse_to_e164(value: str, region: str) -> Optional[str]:
 
     Returns
     -------
-    str or None
-        The E.164 number, or ``None`` when the input is not one.
+    phonenumbers.PhoneNumber or None
+        The parsed number. Possibility is not checked here; callers decide
+        how strict they need to be.
     """
     try:
-        parsed = phonenumbers.parse(value, region)
+        return phonenumbers.parse(value, region)
     except phonenumbers.NumberParseException:
         return None
-
-    if not phonenumbers.is_possible_number(parsed):
-        return None
-
-    return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
 
 
 def to_e164(value: str, region: Optional[str] = None) -> Optional[str]:
@@ -231,11 +227,65 @@ def to_e164(value: str, region: Optional[str] = None) -> Optional[str]:
 
     Results are cached, keyed on the resolved region, because handle lookups
     normalize the same numbers over and over.
+
+    See :func:`to_dialable_e164` for the stricter form the send path needs.
     """
     if not value or is_email_handle(value):
         return None
 
-    return _parse_to_e164(value, region or get_default_region())
+    parsed = _parse(value, region or get_default_region())
+    if parsed is None or not phonenumbers.is_possible_number(parsed):
+        return None
+
+    return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
+
+
+def to_dialable_e164(value: str, region: Optional[str] = None) -> Optional[str]:
+    """
+    Convert a phone number to E.164, refusing forms that are only locally dialable.
+
+    Parameters
+    ----------
+    value : str
+        A phone number in any format.
+    region : str, optional
+        Region to interpret national-format numbers against. Defaults to
+        :func:`get_default_region`.
+
+    Returns
+    -------
+    str or None
+        The E.164 number, or ``None`` when the input is too short, too long,
+        or dialable only from inside its own local area.
+
+    Notes
+    -----
+    :func:`to_e164` is deliberately permissive because matching a stored
+    handle should tolerate whatever spelling it carries. Handing a number to
+    Messages.app is the opposite situation: a seven-digit North American local
+    number parses as possible, and expanding it would dispatch a message to a
+    number the caller never typed.
+
+    The distinction comes from the numbering plan rather than from a digit
+    count. ``IS_POSSIBLE_LOCAL_ONLY`` is exactly the local-form case, while an
+    eight-digit Norwegian number or a nine-digit French one is ``IS_POSSIBLE``
+    and passes. A length floor cannot tell those apart, and rejected every
+    country whose numbers are shorter than the North American ten.
+    """
+    if not value or is_email_handle(value):
+        return None
+
+    parsed = _parse(value, region or get_default_region())
+    if parsed is None:
+        return None
+
+    if (
+        phonenumbers.is_possible_number_with_reason(parsed)
+        != phonenumbers.ValidationResult.IS_POSSIBLE
+    ):
+        return None
+
+    return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
 
 
 def canonical_handle(value: str, region: Optional[str] = None) -> Optional[str]:

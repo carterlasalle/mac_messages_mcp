@@ -26,7 +26,7 @@ from .phone import (
     handle_variants,
     is_email_handle,
     lookup_keys,
-    to_e164,
+    to_dialable_e164,
 )
 
 _APPLESCRIPT_TIMEOUT_SECONDS = 30
@@ -227,15 +227,13 @@ def _format_phone_for_messages(phone: str) -> str:
     and ``(555) 555-0142`` becomes ``+15555550142`` in the United States.
     Returns an empty string when the input is not a usable phone number.
 
-    Inputs of fewer than ten digits are refused regardless of what the parser
-    makes of them. Several numbering plans consider a short national form
-    possible, a seven-digit NANP local among them, so without this floor a
-    half-typed number would be expanded and handed to Messages.app instead of
-    being reported back to the caller.
+    Numbers that are only dialable from inside their own local area, a
+    seven-digit NANP local among them, are refused rather than expanded, so a
+    half-typed number is reported back to the caller instead of being handed
+    to Messages.app. That test comes from the numbering plan, not from a digit
+    count, which is why an eight-digit Norwegian number is accepted.
     """
-    if len(digits_only(phone)) < 10:
-        return ""
-    return to_e164(phone) or ""
+    return to_dialable_e164(phone) or ""
 
 
 def _looks_like_phone_input(value: str) -> bool:
@@ -1184,8 +1182,14 @@ def get_recent_messages(
                 return f"Error processing contact selection: {str(e)}"
 
         # Check if contact might be a name rather than a phone number or email
-        # If any character is NOT a phone/email character, treat as a name
-        if not all(c.isdigit() or c in "+- ()@." for c in contact):
+        # If any character is NOT a phone/email character, treat as a name.
+        # An address is named explicitly: it carries letters, so it would
+        # otherwise be sent to fuzzy name matching, which returns "No contacts
+        # found" for anyone whose address is not in the address book and never
+        # reaches the handle lookup below.
+        if not is_email_handle(contact) and not all(
+            c.isdigit() or c in "+- ()@." for c in contact
+        ):
             # Try fuzzy matching
             matches = find_contact_by_name(contact)
 
