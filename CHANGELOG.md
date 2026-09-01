@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Security
-- Messages/Contacts-derived MCP tool and resource output is structurally neutralized and returned in an explicit `<untrusted-mcp-output>` block. Embedded newlines cannot form extra transcript lines; invisible, format, and bidi characters are shown as escapes. This is not an anti-injection guarantee.
+- Messages/Contacts-derived MCP tool and resource output is structurally neutralized and returned in an explicit `<untrusted-mcp-output>` block. Embedded newlines cannot form extra transcript lines; invisible, format, and bidi characters are shown as escapes. This is not an anti-injection guarantee. Fence idempotence is an in-process marker, so attacker text that only *looks* fenced is still re-serialized.
 - CodeQL workflow pins actions to commit SHAs and analyzes Python with `security-extended` queries. Dependabot is configured for the `uv` and `github-actions` ecosystems.
 
 ### Fixed

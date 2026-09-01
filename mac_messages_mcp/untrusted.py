@@ -136,13 +136,16 @@ def _defang_fence_tokens(text: str) -> str:
     return _FENCE_TOKEN_RE.sub(_DEFANGED_TAG, text)
 
 
+class _PresentedUntrusted(str):
+    """In-process marker that this string was produced by this module.
+
+    MCP clients still receive a ``str``. Attacker-controlled text that merely
+    *looks* fenced is a plain ``str`` and is fully re-serialized.
+    """
+
+
 def _is_mcp_image(value: Any) -> bool:
     return isinstance(value, Image)
-
-
-def _is_fenced_untrusted_block(text: str) -> bool:
-    stripped = text.strip()
-    return stripped.startswith(UNTRUSTED_OPEN) and stripped.endswith(UNTRUSTED_CLOSE)
 
 
 def _truncate_output(text: str, max_chars: int = _MAX_UNTRUSTED_OUTPUT_CHARS) -> str:
@@ -152,29 +155,34 @@ def _truncate_output(text: str, max_chars: int = _MAX_UNTRUSTED_OUTPUT_CHARS) ->
     return f"{text[:max_chars].rstrip()}... [truncated {omitted} chars]"
 
 
-def _present_text(text: str) -> str:
-    if _is_fenced_untrusted_block(text):
-        return text
-
+def _present_text(text: str) -> _PresentedUntrusted:
     original = text if isinstance(text, str) else str(text)
     serialized = neutralize_untrusted_text(original)
     serialized = _defang_fence_tokens(serialized)
     if _visible_ratio(original) < _LOW_VISIBLE_RATIO:
         serialized += _VISIBLE_RATIO_WARNING
     serialized = _truncate_output(serialized)
-    return f"{UNTRUSTED_OPEN}\n{serialized}\n{UNTRUSTED_CLOSE}"
+    return _PresentedUntrusted(f"{UNTRUSTED_OPEN}\n{serialized}\n{UNTRUSTED_CLOSE}")
 
 
 def present_untrusted_output(value: Any) -> Any:
     """The MCP security boundary for Messages/Contacts-derived output.
 
     Strings are neutralized, fence-defanged, length-capped, and wrapped in
-    ``<untrusted-mcp-output>``. Lists are walked so FastMCP ``Image`` objects
-    are returned unchanged while accompanying filename/MIME/path text is
-    presented. Idempotent if a payload is already fenced.
+    ``<untrusted-mcp-output>``. Lists, tuples, and dicts are walked so FastMCP
+    ``Image`` objects are returned unchanged while accompanying
+    filename/MIME/path text is presented.
+
+    Idempotence uses an in-process ``_PresentedUntrusted`` marker, not a
+    string prefix/suffix check. A plain ``str`` that merely looks fenced is
+    fully re-serialized.
     """
+    if isinstance(value, _PresentedUntrusted):
+        return value
     if _is_mcp_image(value):
         return value
+    if isinstance(value, dict):
+        return {key: present_untrusted_output(item) for key, item in value.items()}
     if isinstance(value, list):
         return [present_untrusted_output(item) for item in value]
     if isinstance(value, tuple):
