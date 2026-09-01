@@ -2,6 +2,7 @@
 """
 Mac Messages MCP - Main entry point for the package
 """
+
 from mac_messages_mcp.server import run_server
 
 
