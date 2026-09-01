@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Handle matching now compares numbers on their canonical E.164 form, so an E.164 input finds a handle stored in national format and the reverse. Lookups that find nothing through the indexed query fall back to a canonical scan of the handle table.
 - `_looks_like_phone_input` accepts dot separators, so `05.39.98.00.03` is treated as a phone number rather than a contact name.
 - Address book entries whose number cannot be read as a phone number, such as SMS short codes, entries carrying a trailing label, and foreign numbers saved without their `+`, keep a digits-only key instead of being dropped from the contacts map. Contact name resolution looks up the canonical form, the digits, and the national number, so both sides of the comparison meet whichever form the entry was stored under.
+- The region is read from a macOS regional override when there is one. A Mac running in English with its Region set to France reports `en_US@rg=frzzzz`, whose effective region is France rather than the United States, and its national numbers were still being given a `+1`.
+- Email handles are compared case-insensitively on both sides, so an address stored in mixed case is found whichever way it is typed.
 - Recipients of fewer than ten digits are refused again. Several numbering plans consider a short national form possible, a seven-digit North American local among them, so a half-typed number was being expanded and handed to Messages.app.
 
 ### Added

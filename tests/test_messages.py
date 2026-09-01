@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from mac_messages_mcp.messages import (
+    _check_imessage_availability,
     _connect_sqlite_readonly,
     _find_chat_by_identifier,
     _format_phone_for_messages,
@@ -927,6 +928,42 @@ class TestFindHandlesByPhone(unittest.TestCase):
             result = find_handles_by_phone("+33639980001")
 
         self.assertIsNone(result)
+
+
+class TestEmailHandleCaseFolding(unittest.TestCase):
+    """Tests that an email handle matches whatever case either side is written in.
+
+    handle.id has no declared collation, so SQLite compares it byte for byte.
+    Canonicalization lowercases email addresses, so folding only the input
+    would trade one miss for another: a handle stored in mixed case would stop
+    matching the mixed-case spelling that used to find it.
+    """
+
+    @patch("mac_messages_mcp.messages.query_messages_db")
+    def test_mixed_case_email_matches_lowercase_handle(self, mock_query_db):
+        """A mixed-case address is folded before it reaches the query."""
+        mock_query_db.return_value = [
+            {"ROWID": 1, "service": "iMessage", "text_count": 3, "errors": 0}
+        ]
+
+        self.assertTrue(_check_imessage_availability("Hugo.Example@Example.COM"))
+
+        query, params = mock_query_db.call_args[0][:2]
+        self.assertIn("COLLATE NOCASE", query)
+        self.assertEqual(params, ("hugo.example@example.com",))
+
+    @patch("mac_messages_mcp.messages.query_messages_db")
+    def test_lowercase_email_still_matches_mixed_case_handle(self, mock_query_db):
+        """The comparison is folded in the query, so the stored case does not matter."""
+        mock_query_db.return_value = [
+            {"ROWID": 1, "service": "iMessage", "text_count": 3, "errors": 0}
+        ]
+
+        self.assertTrue(_check_imessage_availability("hugo.example@example.com"))
+
+        # Without COLLATE NOCASE this only works when the stored id happens to
+        # be lowercase too.
+        self.assertIn("COLLATE NOCASE", mock_query_db.call_args[0][0])
 
 
 class TestAddressBookShortCodeRegression(unittest.TestCase):

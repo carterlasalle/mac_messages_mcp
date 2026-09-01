@@ -1211,9 +1211,12 @@ def get_recent_messages(
         # At this point, contact should be a phone number or email
         # Try to find handle_ids with improved phone number matching
         if "@" in contact:
-            # This is an email
-            query = "SELECT ROWID FROM handle WHERE id = ?"
-            results = query_messages_db(query, (contact,))
+            # This is an email. Fold the case on both sides: handle.id compares
+            # case-sensitively, and the canonical form is lowercased.
+            query = "SELECT ROWID FROM handle WHERE id = ? COLLATE NOCASE"
+            results = query_messages_db(
+                query, (canonical_handle(contact) or contact.strip(),)
+            )
             if results and not "error" in results[0] and len(results) > 0:
                 handle_ids = [row["ROWID"] for row in results]
         else:
@@ -1547,8 +1550,12 @@ def _check_imessage_availability(recipient: str) -> bool:
         True if iMessage is available, False otherwise
     """
     if is_email_handle(recipient):
-        query_params = (recipient,)
-        where_clause = "h.id IN (?)"
+        # handle.id has no declared collation, so it compares case-sensitively
+        # while the canonical form is lowercased. Fold both sides instead of
+        # only the input, or an address stored in mixed case stops matching the
+        # mixed-case spelling that used to find it.
+        query_params = (canonical_handle(recipient) or recipient.strip(),)
+        where_clause = "h.id = ? COLLATE NOCASE"
     else:
         # Resolve through the same canonical matching the message lookup uses,
         # so a number that has iMessage history is not reported as SMS-only
@@ -2263,8 +2270,10 @@ def search_attachments(
         # Reuse the same resolution logic the existing tools use, minus the
         # interactive contact:N selection (this is a non-interactive search tool).
         if "@" in contact:
+            # Same case folding as the message lookup, see the note there.
             results = query_messages_db(
-                "SELECT ROWID FROM handle WHERE id = ?", (contact,)
+                "SELECT ROWID FROM handle WHERE id = ? COLLATE NOCASE",
+                (canonical_handle(contact) or contact.strip(),),
             )
             if results and "error" not in results[0]:
                 handle_ids = [r["ROWID"] for r in results]
