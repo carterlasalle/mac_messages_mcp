@@ -28,6 +28,7 @@ from .phone import (
     lookup_keys,
     to_dialable_e164,
 )
+from .untrusted import bound_untrusted_output, neutralize_untrusted_text
 
 _APPLESCRIPT_TIMEOUT_SECONDS = 30
 
@@ -267,7 +268,6 @@ _EMOJI_PATTERN = re.compile(
     "]+"
 )
 
-_CONTROL_CHARS_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _MAX_MESSAGE_BODY_CHARS = 4_000
 
 
@@ -288,19 +288,13 @@ def _clean_text(text: str, strip_punctuation: bool = False) -> str:
 
 
 def _sanitize_message_body(text: str, max_chars: int = _MAX_MESSAGE_BODY_CHARS) -> str:
-    """Prepare message text for single-line MCP output."""
-    if text is None:
-        return ""
+    """Defense-in-depth field sanitizer for message bodies.
 
-    cleaned = str(text).replace("\r\n", "\n").replace("\r", "\n")
-    cleaned = _CONTROL_CHARS_PATTERN.sub(" ", cleaned)
-    cleaned = cleaned.replace("\n", "\\n")
-
-    if max_chars > 0 and len(cleaned) > max_chars:
-        omitted = len(cleaned) - max_chars
-        return f"{cleaned[:max_chars].rstrip()}... [truncated {omitted} chars]"
-
-    return cleaned
+    The MCP security boundary is ``present_untrusted_output`` /
+    ``bound_untrusted_output``. This helper still serializes a single body so
+    a missed interpolation is less likely to introduce a structural line.
+    """
+    return neutralize_untrusted_text(text, max_chars=max_chars)
 
 
 def clean_name(name: str) -> str:
@@ -802,9 +796,17 @@ def send_message(recipient: str, message: str, group_chat: bool = False) -> str:
 
         # Multiple matches, return them all
         contact_list = "\n".join(
-            [f"{i+1}. {c['name']} ({c['phone']})" for i, c in enumerate(contacts[:10])]
+            [
+                f"{i+1}. {neutralize_untrusted_text(c['name'])} "
+                f"({neutralize_untrusted_text(c['phone'])})"
+                for i, c in enumerate(contacts[:10])
+            ]
         )
-        return f"Multiple contacts found matching '{recipient}'. Please specify which one using 'contact:N' where N is the number:\n{contact_list}"
+        return (
+            f"Multiple contacts found matching "
+            f"'{neutralize_untrusted_text(recipient)}'. Please specify which one "
+            f"using 'contact:N' where N is the number:\n{contact_list}"
+        )
 
 
 # Initialize the static variable for recent matches
@@ -925,6 +927,7 @@ def _report_send_outcome(
     Turn the database verification result into the string returned to the
     caller. Never claims success for a message the database says failed.
     """
+    display_name = neutralize_untrusted_text(display_name)
     row = _verify_send_in_db(recipient, sent_after_unix, message_text)
     if row is None:
         # Could not read the database (or the row never appeared); report
@@ -992,7 +995,9 @@ def _send_message_to_recipient(
             return _send_message_direct(recipient, message, contact_name, group_chat)
 
         # AppleScript accepted the send; confirm the outcome in the database
-        display_name = contact_name if contact_name else recipient
+        display_name = neutralize_untrusted_text(
+            contact_name if contact_name else recipient
+        )
         if group_chat:
             # Group chat ids can't be verified against a single handle
             return f"Message sent successfully to {display_name}"
@@ -1100,6 +1105,7 @@ def _find_chat_by_identifier(chat_id: str) -> Optional[Dict[str, Any]]:
     return rows[0]
 
 
+@bound_untrusted_output
 def get_recent_messages(
     hours: int = 24,
     contact: Optional[str] = None,
@@ -1210,7 +1216,10 @@ def get_recent_messages(
                         for i, c in enumerate(matches[:10])
                     ]
                 )
-                return f"Multiple contacts found matching '{contact}'. Please specify which one using 'contact:N' where N is the number:\n{contact_list}"
+                return (
+                    f"Multiple contacts found matching '{contact}'. Please specify "
+                    f"which one using 'contact:N' where N is the number:\n{contact_list}"
+                )
 
         # At this point, contact should be a phone number or email
         # Try to find handle_ids with improved phone number matching
@@ -1367,6 +1376,7 @@ def _escape_like(term: str) -> str:
     return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+@bound_untrusted_output
 def fuzzy_search_messages(
     search_term: str,
     hours: int = 720,
@@ -1710,7 +1720,9 @@ def _send_message_direct(
             if result.startswith("error:"):
                 return f"Error sending group message: {result[6:]}"
             elif result.strip() == "success":
-                display_name = contact_name if contact_name else recipient
+                display_name = neutralize_untrusted_text(
+                    contact_name if contact_name else recipient
+                )
                 return f"Group message sent successfully to {display_name}"
             else:
                 return f"Unknown group message result: {result}"
@@ -2168,11 +2180,12 @@ def _format_attachment_summary(attachments: List[Dict[str, Any]]) -> str:
         return ""
     parts = []
     for att in attachments:
-        mime = att.get("mime_type") or "?"
+        mime = neutralize_untrusted_text(att.get("mime_type") or "?")
         # Filename helps when an agent is choosing between several attachments
         # on the same message; cap at 3 to keep the line short.
         if len(attachments) <= 3 and att.get("filename"):
-            parts.append(f"#{att['id']} {mime} ({att['filename']})")
+            filename = neutralize_untrusted_text(att["filename"])
+            parts.append(f"#{att['id']} {mime} ({filename})")
         else:
             parts.append(f"#{att['id']} {mime}")
     return f" [attachments: {', '.join(parts)}]"
@@ -2218,6 +2231,7 @@ def _attachments_for_message_ids(
     return grouped
 
 
+@bound_untrusted_output
 def search_attachments(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
@@ -2374,6 +2388,7 @@ def _heic_to_png_bytes(heic_bytes: bytes) -> Optional[bytes]:
         return None
 
 
+@bound_untrusted_output
 def get_attachment(
     attachment_id: int,
     max_bytes: int = _DEFAULT_MAX_INLINE_BYTES,
@@ -2468,4 +2483,6 @@ def get_attachment(
     fmt = mime.split("/", 1)[1] if "/" in mime else "png"
     if fmt == "jpg":
         fmt = "jpeg"
+    if fmt not in {"jpeg", "png", "gif", "webp"}:
+        fmt = "png"
     return [metadata_text, Image(data=raw, format=fmt)]
