@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from mac_messages_mcp.messages import (
+    _check_imessage_availability,
     _connect_sqlite_readonly,
     _find_chat_by_identifier,
     _format_phone_for_messages,
@@ -19,13 +20,17 @@ from mac_messages_mcp.messages import (
     escape_applescript,
     extract_body_from_attributed,
     find_contact_by_name,
+    find_handles_by_phone,
     get_chat_mapping,
+    get_contact_name,
     get_messages_db_path,
     get_recent_messages,
+    process_contacts,
     query_messages_db,
     run_applescript,
     send_message,
 )
+from tests.test_phone import region_pinned
 
 
 class TestMessages(unittest.TestCase):
@@ -338,35 +343,97 @@ class TestRecipientNormalization(unittest.TestCase):
     def test_phone_formatter_preserves_e164_plus(self):
         self.assertEqual(_format_phone_for_messages("+19565179045"), "+19565179045")
 
-    def test_phone_formatter_adds_plus_to_country_code_digits(self):
-        self.assertEqual(_format_phone_for_messages("19565179045"), "+19565179045")
+    def test_phone_formatter_does_not_assume_north_america(self):
+        """A ten-digit national number takes its own region's country code, not +1."""
+        with region_pinned("FR"):
+            self.assertEqual(_format_phone_for_messages("0639980001"), "+33639980001")
+            self.assertEqual(
+                _format_phone_for_messages("05 39 98 00 03"), "+33539980003"
+            )
 
-    def test_phone_formatter_assumes_us_country_code_for_ten_digits(self):
-        self.assertEqual(_format_phone_for_messages("(956) 517-9045"), "+19565179045")
+    def test_phone_formatter_keeps_foreign_e164_intact(self):
+        """An E.164 number is never reinterpreted against the configured region."""
+        with region_pinned("US"):
+            self.assertEqual(_format_phone_for_messages("+33639980001"), "+33639980001")
+
+    def test_phone_formatter_adds_plus_to_country_code_digits(self):
+        with region_pinned("US"):
+            self.assertEqual(_format_phone_for_messages("19565179045"), "+19565179045")
+
+    def test_phone_formatter_expands_ten_digits_against_configured_region(self):
+        with region_pinned("US"):
+            self.assertEqual(
+                _format_phone_for_messages("(956) 517-9045"), "+19565179045"
+            )
+
+    def test_phone_formatter_rejects_locally_dialable_form(self):
+        """A number dialable only from inside its own area is refused, not expanded.
+
+        Regression: `is_possible_number` is region-relative and accepts a
+        seven-digit NANP local under US, so a half-typed number such as
+        "555-0142" was expanded to "+15550142" and handed to Messages.app
+        instead of being reported back to the caller.
+        """
+        with region_pinned("US"):
+            self.assertEqual(_format_phone_for_messages("555-0142"), "")
+            self.assertEqual(_format_phone_for_messages("5550142"), "")
+
+    def test_phone_formatter_accepts_national_plans_shorter_than_ten_digits(self):
+        """A number is judged by its numbering plan, not by a ten-digit floor.
+
+        Regression: the floor that refused the seven-digit local above was a
+        digit count, so it also refused every country whose numbers are
+        shorter than the North American ten. Norwegian numbers are eight
+        digits and were rejected outright.
+        """
+        with region_pinned("NO"):
+            self.assertEqual(_format_phone_for_messages("22 82 30 00"), "+4722823000")
+        with region_pinned("FR"):
+            # Nine digits, a legitimate Paris landline in national significant
+            # form, refused by the same floor.
+            self.assertEqual(_format_phone_for_messages("123456789"), "+33123456789")
+
+    def test_phone_formatter_accepts_legitimate_national_and_e164_numbers(self):
+        """Ordinary national and E.164 input is unaffected by the local-form check."""
+        with region_pinned("FR"):
+            self.assertEqual(_format_phone_for_messages("0639980001"), "+33639980001")
+            self.assertEqual(_format_phone_for_messages("+33639980001"), "+33639980001")
+
+    @patch("mac_messages_mcp.messages._send_message_to_recipient")
+    def test_send_message_rejects_locally_dialable_form(self, mock_send):
+        """send_message reports the guard error instead of dispatching a half-typed number."""
+        with region_pinned("US"):
+            result = send_message("555-0142", "hello")
+
+        self.assertIn("is not a usable phone number", result)
+        mock_send.assert_not_called()
 
     @patch("mac_messages_mcp.messages._send_message_to_recipient")
     def test_send_message_normalizes_bare_digits_before_dispatch(self, mock_send):
         mock_send.return_value = "sent"
 
-        result = send_message("19565179045", "hello")
+        with region_pinned("US"):
+            result = send_message("19565179045", "hello")
 
         self.assertEqual(result, "sent")
         mock_send.assert_called_once_with("+19565179045", "hello", group_chat=False)
 
     @patch("mac_messages_mcp.messages._send_message_to_recipient")
     def test_send_message_rejects_short_phone_numbers(self, mock_send):
-        result = send_message("12345", "hello")
+        with region_pinned("US"):
+            result = send_message("12345", "hello")
 
-        self.assertIn("Phone recipients must be E.164-style", result)
+        self.assertIn("is not a usable phone number", result)
         mock_send.assert_not_called()
 
     @patch("mac_messages_mcp.messages.get_cached_contacts")
     def test_find_contact_returns_messages_ready_phone_number(self, mock_contacts):
-        mock_contacts.return_value = {"19565179045": "Hugo Example"}
+        # The contacts map is keyed on canonical E.164 form.
+        mock_contacts.return_value = {"+19565179045": "Hugo Example"}
         with patch.dict(
             "mac_messages_mcp.messages._PHONE_TO_DETAILS_MAP",
             {
-                "19565179045": {
+                "+19565179045": {
                     "first_name": "Hugo",
                     "last_name": "Example",
                     "nickname": "",
@@ -800,10 +867,174 @@ class TestCandidateHandles(unittest.TestCase):
     def test_candidate_handles_us_number(self):
         from mac_messages_mcp.messages import _candidate_handles
 
-        handles = _candidate_handles("6058813494")
+        with region_pinned("US"):
+            handles = _candidate_handles("6058813494")
+
         self.assertIn("6058813494", handles)
         self.assertIn("+16058813494", handles)
         self.assertIn("16058813494", handles)
+
+
+class TestFindHandlesByPhone(unittest.TestCase):
+    """Tests for find_handles_by_phone matching a phone number to stored handle ids."""
+
+    @patch("mac_messages_mcp.messages.query_messages_db")
+    def test_e164_input_matches_handle_stored_as_e164(self, mock_query_db):
+        """An E.164 input searches for the E.164 spelling the handle is stored under."""
+        mock_query_db.return_value = [{"ROWID": 1}]
+
+        with region_pinned("FR"):
+            result = find_handles_by_phone("+33639980001")
+
+        self.assertEqual(result, [1])
+        # The regression: the "+" used to be stripped before the lookup, so the
+        # query asked for "33639980001" and never matched "+33639980001".
+        self.assertIn("+33639980001", mock_query_db.call_args[0][1])
+
+    @patch("mac_messages_mcp.messages.query_messages_db")
+    def test_national_input_finds_same_handle_under_configured_region(
+        self, mock_query_db
+    ):
+        """A national-format input under region FR searches for the FR E.164 spelling."""
+        mock_query_db.return_value = [{"ROWID": 2}]
+
+        with region_pinned("FR"):
+            result = find_handles_by_phone("06 39 98 00 01")
+
+        self.assertEqual(result, [2])
+        searched = mock_query_db.call_args[0][1]
+        self.assertIn("+33639980001", searched)
+        # It must not have been read as a North American number.
+        self.assertNotIn("+10639980001", searched)
+
+    @patch("mac_messages_mcp.messages.query_messages_db")
+    def test_falls_back_to_canonical_scan_when_indexed_lookup_finds_nothing(
+        self, mock_query_db
+    ):
+        """When the WHERE id IN (...) lookup misses, a full-table canonical scan still matches."""
+        mock_query_db.side_effect = [
+            [],  # indexed lookup on the predicted variant spellings: no match
+            [
+                {"ROWID": 3, "id": "0639980001"},  # same number, different spelling
+                {"ROWID": 4, "id": "+15555550142"},
+            ],
+        ]
+
+        with region_pinned("FR"):
+            result = find_handles_by_phone("+33639980001")
+
+        self.assertEqual(result, [3])
+
+    @patch("mac_messages_mcp.messages.query_messages_db")
+    def test_no_match_returns_none(self, mock_query_db):
+        """When no stored handle reduces to the same canonical number, None is returned."""
+        mock_query_db.side_effect = [
+            [],
+            [{"ROWID": 4, "id": "+15555550142"}],
+        ]
+
+        with region_pinned("FR"):
+            result = find_handles_by_phone("+33639980001")
+
+        self.assertIsNone(result)
+
+
+class TestEmailHandleCaseFolding(unittest.TestCase):
+    """Tests that an email handle matches whatever case either side is written in.
+
+    handle.id has no declared collation, so SQLite compares it byte for byte.
+    Canonicalization lowercases email addresses, so folding only the input
+    would trade one miss for another: a handle stored in mixed case would stop
+    matching the mixed-case spelling that used to find it.
+    """
+
+    @patch("mac_messages_mcp.messages.query_messages_db")
+    def test_mixed_case_email_matches_lowercase_handle(self, mock_query_db):
+        """A mixed-case address is folded before it reaches the query."""
+        mock_query_db.return_value = [
+            {"ROWID": 1, "service": "iMessage", "text_count": 3, "errors": 0}
+        ]
+
+        self.assertTrue(_check_imessage_availability("Hugo.Example@Example.COM"))
+
+        query, params = mock_query_db.call_args[0][:2]
+        self.assertIn("COLLATE NOCASE", query)
+        self.assertEqual(params, ("hugo.example@example.com",))
+
+    @patch("mac_messages_mcp.messages.query_messages_db")
+    def test_lowercase_email_still_matches_mixed_case_handle(self, mock_query_db):
+        """The comparison is folded in the query, so the stored case does not matter."""
+        mock_query_db.return_value = [
+            {"ROWID": 1, "service": "iMessage", "text_count": 3, "errors": 0}
+        ]
+
+        self.assertTrue(_check_imessage_availability("hugo.example@example.com"))
+
+        # Without COLLATE NOCASE this only works when the stored id happens to
+        # be lowercase too.
+        self.assertIn("COLLATE NOCASE", mock_query_db.call_args[0][0])
+
+    @patch("mac_messages_mcp.messages.find_contact_by_name")
+    @patch("mac_messages_mcp.messages.query_messages_db")
+    def test_address_is_not_routed_through_name_matching(
+        self, mock_query_db, mock_find_by_name
+    ):
+        """An address reaches the handle lookup instead of fuzzy name matching.
+
+        An address contains letters, so the guard that separates names from
+        numbers sent it to find_contact_by_name, which answered "No contacts
+        found" for anyone whose address is not in the address book and
+        returned before the handle query could run.
+        """
+        mock_query_db.return_value = []
+        mock_find_by_name.return_value = []
+
+        result = get_recent_messages(hours=1, contact="hugo.example@example.com")
+
+        mock_find_by_name.assert_not_called()
+        self.assertNotIn("No contacts found", result)
+
+
+class TestAddressBookShortCodeRegression(unittest.TestCase):
+    """Tests that an unparseable address book entry stays reachable (regression: H1).
+
+    process_contacts used to key the contacts map on canonical_handle(phone)
+    under an `if`, so any entry phonenumbers could not parse, an SMS short
+    code among them, was silently dropped. It now keys on contact_key, which
+    falls back to digits, and get_contact_name looks the handle up through
+    lookup_keys so both sides stay symmetric.
+    """
+
+    def test_process_contacts_keeps_short_code_entry(self):
+        """A contact whose only number is an SMS short code is kept in the map."""
+        contacts = [
+            {
+                "first_name": "Hugo",
+                "last_name": "Example",
+                "nickname": "",
+                "phone": "55501",
+                "email": "",
+            }
+        ]
+
+        with region_pinned("FR"):
+            contacts_map = process_contacts(contacts)
+
+        self.assertEqual(contacts_map.get("55501"), "Hugo Example")
+
+    @patch("mac_messages_mcp.messages.get_cached_contacts")
+    @patch("mac_messages_mcp.messages.query_messages_db")
+    def test_get_contact_name_resolves_short_code_handle(
+        self, mock_query_db, mock_contacts
+    ):
+        """get_contact_name resolves a handle stored as a short code, through lookup_keys."""
+        mock_query_db.return_value = [{"id": "55501"}]
+        mock_contacts.return_value = {"55501": "Hugo Example"}
+
+        with region_pinned("FR"):
+            name = get_contact_name(1)
+
+        self.assertEqual(name, "Hugo Example")
 
 
 if __name__ == "__main__":

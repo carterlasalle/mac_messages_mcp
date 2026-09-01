@@ -18,6 +18,17 @@ from typing import Any, Dict, List, Optional, Tuple
 from mcp.server.fastmcp import Image
 from thefuzz import fuzz
 
+from .phone import (
+    canonical_handle,
+    contact_key,
+    digits_only,
+    get_default_region,
+    handle_variants,
+    is_email_handle,
+    lookup_keys,
+    to_dialable_e164,
+)
+
 _APPLESCRIPT_TIMEOUT_SECONDS = 30
 
 
@@ -204,24 +215,35 @@ def normalize_phone_number(phone: str) -> str:
     """
     Normalize a phone number by removing all non-digit characters.
     """
-    if not phone:
-        return ""
-    return "".join(c for c in phone if c.isdigit())
+    return digits_only(phone)
 
 
 def _format_phone_for_messages(phone: str) -> str:
-    """Return the phone number format Messages resolves most reliably."""
-    normalized = normalize_phone_number(phone)
-    if len(normalized) < 10:
-        return ""
-    if len(normalized) == 10:
-        return f"+1{normalized}"
-    return f"+{normalized}"
+    """
+    Return the phone number format Messages resolves most reliably.
+
+    National-format numbers are expanded using the region this Mac is
+    configured for, so ``06 39 98 00 01`` becomes ``+33639980001`` in France
+    and ``(555) 555-0142`` becomes ``+15555550142`` in the United States.
+    Returns an empty string when the input is not a usable phone number.
+
+    Numbers that are only dialable from inside their own local area, a
+    seven-digit NANP local among them, are refused rather than expanded, so a
+    half-typed number is reported back to the caller instead of being handed
+    to Messages.app. That test comes from the numbering plan, not from a digit
+    count, which is why an eight-digit Norwegian number is accepted.
+    """
+    return to_dialable_e164(phone) or ""
 
 
 def _looks_like_phone_input(value: str) -> bool:
-    """True when the input is intended as a phone number, not a contact name."""
-    return bool(value) and all(c.isdigit() or c in "+- ()" for c in value)
+    """
+    True when the input is intended as a phone number, not a contact name.
+
+    Accepts the separators people actually type, including the dots used in
+    French national notation (``05.39.98.00.03``).
+    """
+    return bool(value) and all(c.isdigit() or c in "+-. ()" for c in value)
 
 
 # Global cache for contacts map
@@ -527,8 +549,12 @@ def process_contacts(contacts) -> Dict[str, str]:
             if "X-IMAGETYPE" in phone:
                 phone = phone.split("X-IMAGETYPE")[0]
 
-            # Normalize phone number and add to map
-            normalized_phone = normalize_phone_number(phone)
+            # Key the map on the canonical (E.164) form so a number stored as
+            # "06 39 98 00 01" in the address book matches the "+33639980001"
+            # handle the Messages database recorded for the same person.
+            # Short codes and entries the parser cannot read keep a digits-only
+            # key rather than being dropped from the map entirely.
+            normalized_phone = contact_key(phone)
             if normalized_phone:
                 contacts_map[normalized_phone] = full_name
 
@@ -612,7 +638,7 @@ def get_addressbook_contacts_subprocess() -> Dict[str, str]:
                     if not full_name.strip():
                         continue
 
-                    normalized_phone = normalize_phone_number(phone)
+                    normalized_phone = contact_key(phone)
                     if normalized_phone:
                         contacts_map[normalized_phone] = full_name
                 except json.JSONDecodeError:
@@ -746,7 +772,12 @@ def send_message(recipient: str, message: str, group_chat: bool = False) -> str:
     if _looks_like_phone_input(recipient):
         formatted_number = _format_phone_for_messages(recipient)
         if not formatted_number:
-            return "Error: Phone recipients must be E.164-style numbers with at least 10 digits, such as +14155551234."
+            return (
+                f"Error: '{recipient}' is not a usable phone number for region "
+                f"{get_default_region()}. Use an E.164 number such as "
+                "+14155551234, or set MAC_MESSAGES_REGION if your national "
+                "numbers belong to another region."
+            )
         return _send_message_to_recipient(formatted_number, message, group_chat=False)
 
     # Check if recipient is an email address
@@ -788,15 +819,7 @@ def _candidate_handles(recipient: str) -> List[str]:
     Build the set of handle ids the Messages database might have recorded
     for this recipient (email as-is; phone numbers in several formats).
     """
-    if "@" in recipient:
-        return [recipient]
-    digits = normalize_phone_number(recipient)
-    candidates = {recipient.strip()}
-    if digits:
-        candidates.add(digits)
-        candidates.add("+" + digits)
-        candidates.update(_get_phone_formats(digits))
-    return [c for c in candidates if c]
+    return handle_variants(recipient)
 
 
 def _row_text(row: Dict[str, Any]) -> Optional[str]:
@@ -1009,27 +1032,14 @@ def get_contact_name(handle_id: int) -> str:
     # Try to match with AddressBook contacts
     contacts = get_cached_contacts()
 
-    # Check if handle is an email address (contains @ and no leading +)
-    if "@" in handle_id_value:
-        email_lower = handle_id_value.strip().lower()
-        if email_lower in contacts:
-            return contacts[email_lower]
-    else:
-        normalized_handle = normalize_phone_number(handle_id_value)
-
-        # Try different variations of the number for matching
-        if normalized_handle in contacts:
-            return contacts[normalized_handle]
-
-        # Sometimes numbers in the addressbook have the country code, but messages don't
-        if normalized_handle.startswith("1") and len(normalized_handle) > 10:
-            # Try without country code
-            if normalized_handle[1:] in contacts:
-                return contacts[normalized_handle[1:]]
-        elif len(normalized_handle) == 10:  # US number without country code
-            # Try with country code
-            if "1" + normalized_handle in contacts:
-                return contacts["1" + normalized_handle]
+    # Both sides of this comparison are canonical, so a handle recorded as
+    # "+33639980001" matches an address book entry written "06 39 98 00 01"
+    # without having to enumerate country-code variations by hand. The extra
+    # keys cover the address book entries that could not be canonicalized and
+    # so are stored under their digits.
+    for key in lookup_keys(handle_id_value):
+        if key in contacts:
+            return contacts[key]
 
     # If no match found in AddressBook, fall back to display name from chat
     contact_query = """
@@ -1172,8 +1182,14 @@ def get_recent_messages(
                 return f"Error processing contact selection: {str(e)}"
 
         # Check if contact might be a name rather than a phone number or email
-        # If any character is NOT a phone/email character, treat as a name
-        if not all(c.isdigit() or c in "+- ()@." for c in contact):
+        # If any character is NOT a phone/email character, treat as a name.
+        # An address is named explicitly: it carries letters, so it would
+        # otherwise be sent to fuzzy name matching, which returns "No contacts
+        # found" for anyone whose address is not in the address book and never
+        # reaches the handle lookup below.
+        if not is_email_handle(contact) and not all(
+            c.isdigit() or c in "+- ()@." for c in contact
+        ):
             # Try fuzzy matching
             matches = find_contact_by_name(contact)
 
@@ -1199,9 +1215,12 @@ def get_recent_messages(
         # At this point, contact should be a phone number or email
         # Try to find handle_ids with improved phone number matching
         if "@" in contact:
-            # This is an email
-            query = "SELECT ROWID FROM handle WHERE id = ?"
-            results = query_messages_db(query, (contact,))
+            # This is an email. Fold the case on both sides: handle.id compares
+            # case-sensitively, and the canonical form is lowercased.
+            query = "SELECT ROWID FROM handle WHERE id = ? COLLATE NOCASE"
+            results = query_messages_db(
+                query, (canonical_handle(contact) or contact.strip(),)
+            )
             if results and not "error" in results[0] and len(results) > 0:
                 handle_ids = [row["ROWID"] for row in results]
         else:
@@ -1209,8 +1228,10 @@ def get_recent_messages(
             handle_ids = find_handles_by_phone(contact)
 
         if not handle_ids:
-            # Try a direct search in message table to see if any messages exist
-            normalized = normalize_phone_number(contact)
+            # Try a direct search in message table to see if any messages exist.
+            # Match on the digits of the canonical number so that a national
+            # input still finds a handle stored in international format.
+            normalized = digits_only(canonical_handle(contact) or contact)
             query = """
             SELECT COUNT(*) as count 
             FROM message m
@@ -1532,29 +1553,35 @@ def _check_imessage_availability(recipient: str) -> bool:
     Returns:
         True if iMessage is available, False otherwise
     """
-    query_params = ()
-
-    if "@" in recipient:
-        placeholders = "?"
-        query_params = (recipient,)
+    if is_email_handle(recipient):
+        # handle.id has no declared collation, so it compares case-sensitively
+        # while the canonical form is lowercased. Fold both sides instead of
+        # only the input, or an address stored in mixed case stops matching the
+        # mixed-case spelling that used to find it.
+        query_params = (canonical_handle(recipient) or recipient.strip(),)
+        where_clause = "h.id = ? COLLATE NOCASE"
     else:
-        normalized = normalize_phone_number(recipient)
+        # Resolve through the same canonical matching the message lookup uses,
+        # so a number that has iMessage history is not reported as SMS-only
+        # just because it is written differently from the stored handle.
+        handle_rowids = find_handles_by_phone(recipient)
 
-        if not normalized:
+        if not handle_rowids:
             return False
 
-        query_params = tuple(_get_phone_formats(normalized))
+        query_params = tuple(handle_rowids)
         placeholders = ", ".join(["?" for _ in query_params])
+        where_clause = f"h.ROWID IN ({placeholders})"
 
     query = f"""
-        SELECT 
+        SELECT
             h.ROWID,
             h.service,
             COUNT(m.guid) as text_count,
             COUNT(CASE WHEN m.error != 0 then 1 END) as errors
         FROM handle h
         LEFT JOIN message m ON h.ROWID = m.handle_id
-        WHERE h.id IN ({placeholders})
+        WHERE {where_clause}
         GROUP BY
             h.ROWID,
             h.service
@@ -1820,29 +1847,17 @@ def check_messages_db_access() -> str:
 
 def _get_phone_formats(recipient: str) -> List[str]:
     """
-    Get different phone recipient formats. Assumes the recipient given has already been normalized.
+    Get the handle id formats a phone recipient may be stored under.
 
     Args:
-        recipient: Normalized phone recipient
+        recipient: Phone recipient, in any format
 
     Returns:
-        List of phone recipients in various formats
+        List of phone recipients in various formats, most canonical first.
+        National-format numbers are expanded against the region this Mac is
+        configured for rather than assumed to be North American.
     """
-    # Start with the normalized input
-    formats_to_try = [recipient]
-
-    # For US recipients, try with and without country code
-    if recipient.startswith("1") and len(recipient) > 10:
-        # Try without the country code
-        formats_to_try.append(recipient[1:])
-        formats_to_try.append("+" + recipient)
-
-    elif len(recipient) == 10:
-        # Try with the country code
-        formats_to_try.append("1" + recipient)
-        formats_to_try.append("+1" + recipient)
-
-    return formats_to_try
+    return handle_variants(recipient)
 
 
 def find_handle_by_phone(phone: str) -> Optional[int]:
@@ -1873,19 +1888,15 @@ def find_handles_by_phone(phone: str) -> Optional[List[int]]:
     Returns:
         List of handle_id's if found, None otherwise
     """
-    # Normalize the phone number (remove all non-digit characters)
-    normalized = normalize_phone_number(phone)
-    if not normalized:
+    formats_to_try = _get_phone_formats(phone)
+    if not formats_to_try:
         return None
-
-    # Try various formats for US numbers
-    formats_to_try = _get_phone_formats(normalized)
 
     placeholders = ", ".join(["?" for _ in formats_to_try])
 
     # Finds all handle_id's associated with the number
     query = f"""
-    SELECT 
+    SELECT
     ROWID
     FROM handle
     WHERE id IN ({placeholders})
@@ -1893,13 +1904,45 @@ def find_handles_by_phone(phone: str) -> Optional[List[int]]:
 
     results = query_messages_db(query, tuple(formats_to_try))
 
-    if not results or "error" in results[0]:
+    if results and "error" not in results[0]:
+        rowids = [row["ROWID"] for row in results]
+        if rowids:
+            return rowids
+
+    # Nothing matched one of the shapes we can predict, so fall back to
+    # comparing every handle on its canonical form. This catches numbers
+    # Messages stored in a spelling the variant list does not anticipate.
+    return _find_handles_by_canonical_form(phone)
+
+
+def _find_handles_by_canonical_form(phone: str) -> Optional[List[int]]:
+    """
+    Find handle ROWIDs whose id is the same number as `phone`, whatever its format.
+
+    Args:
+        phone: Phone number in any format
+
+    Returns:
+        List of handle_id's if any handle reduces to the same E.164 number,
+        None otherwise.
+
+    Notes:
+        Scans the whole handle table, which holds a few thousand rows at most,
+        so this stays well under a millisecond per call once the canonical
+        forms are cached. Only reached when the indexed lookup found nothing.
+    """
+    target = canonical_handle(phone)
+    if not target:
         return None
 
-    if len(results) == 0:
+    rows = query_messages_db("SELECT ROWID, id FROM handle")
+    if not rows or "error" in rows[0]:
         return None
 
-    return [row["ROWID"] for row in results]
+    rowids = [
+        row["ROWID"] for row in rows if canonical_handle(row.get("id", "")) == target
+    ]
+    return rowids or None
 
 
 def check_addressbook_access() -> str:
@@ -2231,8 +2274,10 @@ def search_attachments(
         # Reuse the same resolution logic the existing tools use, minus the
         # interactive contact:N selection (this is a non-interactive search tool).
         if "@" in contact:
+            # Same case folding as the message lookup, see the note there.
             results = query_messages_db(
-                "SELECT ROWID FROM handle WHERE id = ?", (contact,)
+                "SELECT ROWID FROM handle WHERE id = ? COLLATE NOCASE",
+                (canonical_handle(contact) or contact.strip(),),
             )
             if results and "error" not in results[0]:
                 handle_ids = [r["ROWID"] for r in results]

@@ -27,6 +27,7 @@ classifiers = [
 dependencies = [
     "mcp[cli]>=1.2.0,<2.0.0", # For FastMCP functionality with CLI support
     "thefuzz>=0.20.0",
+    "phonenumbers>=8.13.0", # E.164 normalization against the Mac's configured region
     "python-Levenshtein>=0.23.0", # Optional but recommended for performance
     "pillow>=10.0.0", # Image format handling for tool_get_attachment
     "pillow-heif>=0.13.0", # HEIC support so iPhone photos can be returned inline

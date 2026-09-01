@@ -229,6 +229,46 @@ late. Do not send it until I confirm.
 The first `uvx` launch can take longer while it downloads and caches Python
 dependencies.
 
+### 5. Optional: set the phone number region
+
+Phone numbers written in national format (`06 39 98 00 01`, `(415) 555-1234`)
+have to be expanded to E.164 before they can be matched against the Messages
+database, and that expansion needs to know which country they belong to. The
+server reads your Mac's own region setting for this, so on a correctly
+configured Mac there is nothing to do.
+
+Set `MAC_MESSAGES_REGION` to an [ISO 3166-1 alpha-2][iso3166] code when your
+numbers belong to a different region than your Mac is configured for — a French
+SIM on a Mac set to `en_US`, say:
+
+```json
+{
+  "mcpServers": {
+    "mac-messages": {
+      "command": "uvx",
+      "args": ["mac-messages-mcp"],
+      "env": { "MAC_MESSAGES_REGION": "FR" }
+    }
+  }
+}
+```
+
+For Claude Code:
+
+```bash
+claude mcp add --transport stdio --scope user \
+  --env MAC_MESSAGES_REGION=FR \
+  mac-messages -- uvx mac-messages-mcp
+```
+
+The region is resolved once at startup, so restart the server after changing
+it. Resolution order: `MAC_MESSAGES_REGION`, then the macOS `AppleLocale`
+preference, then `LC_ALL` / `LC_CTYPE` / `LANG`, then `US`. Numbers already
+written in E.164 (`+33639980001`) are never reinterpreted and need none of
+this.
+
+[iso3166]: https://en.wikipedia.org/wiki/ISO_3166-1_alpha-2
+
 ## Available tools
 
 <!-- markdownlint-disable MD013 -->
@@ -264,9 +304,15 @@ For direct messages, E.164 phone numbers are the most reliable format:
 +14155551234
 ```
 
-The server normalizes bare numbers with a country code and converts 10-digit US
-numbers to `+1...`. It also accepts email addresses, contact names, and
-`contact:N` selections returned after an ambiguous contact search.
+Numbers written in national format work too. They are expanded to E.164 using
+the region your Mac is configured for, so `(415) 555-1234` becomes
+`+14155551234` on a US Mac and `06 39 98 00 01` becomes `+33639980001` on a
+French one. Set `MAC_MESSAGES_REGION` to an ISO 3166-1 alpha-2 code
+(`MAC_MESSAGES_REGION=GB`) when your numbers belong to a different region than
+your Mac does. Numbers already in E.164 are never reinterpreted.
+
+The server also accepts email addresses, contact names, and `contact:N`
+selections returned after an ambiguous contact search.
 
 For a group conversation, call `tool_get_chats`, pass its chat ID to
 `tool_send_message`, and set `group_chat=true`. Use the same ID as `chat_id` in
@@ -330,6 +376,11 @@ the ChatGPT desktop app itself.
 Allow the launching app to access Contacts if macOS prompts. Confirm Full Disk
 Access, restart the app, and call `tool_check_addressbook` followed by
 `tool_check_contacts`.
+
+If contacts are listed but their numbers carry the wrong country code, the
+server is expanding your national-format numbers against the wrong region. Set
+`MAC_MESSAGES_REGION` to the right ISO 3166-1 alpha-2 code and restart the
+server.
 
 ### Reading works but sending fails
 
