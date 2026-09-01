@@ -34,6 +34,14 @@ FALLBACK_REGION = "US"
 # two-letter region rather than the language or the script subtag.
 _LOCALE_REGION_RE = re.compile(r"[-_]([A-Za-z]{2})(?:[-_@.]|$)")
 
+# macOS lets Region be set independently of Language, and reports it as an ICU
+# regional override keyword on the locale: "en_US@rg=frzzzz" is a Mac running in
+# English whose region is France. That override is the effective region, and it
+# is the configuration this whole module exists for, so it has to win over the
+# "_US" the base locale carries. The value is a subdivision id, so the region is
+# its first two letters ("frzzzz", "usca").
+_LOCALE_RG_REGION_RE = re.compile(r"[@;]rg=([A-Za-z]{2})[A-Za-z0-9]*(?:;|$)")
+
 
 def _region_from_locale(locale_id: Optional[str]) -> Optional[str]:
     """
@@ -42,18 +50,34 @@ def _region_from_locale(locale_id: Optional[str]) -> Optional[str]:
     Parameters
     ----------
     locale_id : str or None
-        A locale identifier such as ``"fr_FR"`` or ``"en_US.UTF-8"``.
+        A locale identifier such as ``"fr_FR"``, ``"en_US.UTF-8"`` or
+        ``"en_US@rg=frzzzz"``.
 
     Returns
     -------
     str or None
         The uppercased region code when it is one phonenumbers knows about,
         ``None`` otherwise.
+
+    Notes
+    -----
+    An ``rg`` override is read first: it is what macOS sets when Region is
+    configured separately from Language, and it beats the region embedded in
+    the base locale. An override naming a region phonenumbers has no metadata
+    for is ignored rather than fatal, so the base locale still gets its turn.
     """
     if not locale_id:
         return None
 
-    match = _LOCALE_REGION_RE.search(locale_id.strip())
+    locale_id = locale_id.strip()
+
+    override = _LOCALE_RG_REGION_RE.search(locale_id)
+    if override:
+        region = override.group(1).upper()
+        if region in phonenumbers.SUPPORTED_REGIONS:
+            return region
+
+    match = _LOCALE_REGION_RE.search(locale_id)
     if not match:
         return None
 

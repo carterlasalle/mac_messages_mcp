@@ -286,6 +286,29 @@ class TestRegionFromLocale(unittest.TestCase):
         """An empty locale string yields None."""
         self.assertIsNone(_region_from_locale(""))
 
+    def test_regional_override_beats_the_base_locale(self):
+        """A macOS rg override wins over the region carried by the base locale.
+
+        This is a Mac running in English whose Region is set to France, which
+        is precisely the configuration region-aware parsing exists for. Reading
+        "_US" here would give French numbers a +1 again.
+        """
+        self.assertEqual(_region_from_locale("en_US@rg=frzzzz"), "FR")
+
+    def test_regional_override_without_subdivision_padding(self):
+        """An rg override naming a subdivision still yields its region."""
+        self.assertEqual(_region_from_locale("en_US@rg=usca"), "US")
+
+    def test_regional_override_among_other_keywords(self):
+        """An rg override sitting beside other locale keywords is still read."""
+        self.assertEqual(
+            _region_from_locale("en_US@rg=gbzzzz;calendar=gregorian"), "GB"
+        )
+
+    def test_unsupported_regional_override_falls_back_to_base_locale(self):
+        """An override naming a region phonenumbers ignores leaves the base locale in charge."""
+        self.assertEqual(_region_from_locale("fr_FR@rg=zzzzzz"), "FR")
+
     def test_none_locale_yields_none(self):
         """A None locale yields None."""
         self.assertIsNone(_region_from_locale(None))
