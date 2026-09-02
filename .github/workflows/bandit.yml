@@ -38,7 +38,8 @@ jobs:
       - name: Run Bandit
         run: >
           uvx --from 'bandit[sarif]' bandit
-          -r mac_messages_mcp tests
+          -c .bandit
+          -r mac_messages_mcp
           -f sarif
           -o bandit.sarif
           --exit-zero

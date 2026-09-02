@@ -1,0 +1,5 @@
+# Pytest asserts are not a security signal.
+# B404/B603/B607: osascript and `defaults` are invoked with argv lists, not a shell.
+# B608: remaining f-string SQL only interpolates bound `?` placeholders.
+exclude_dirs: ['tests']
+skips: ['B101', 'B404', 'B603', 'B607', 'B608']

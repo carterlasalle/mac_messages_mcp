@@ -21,6 +21,7 @@ from mac_messages_mcp.messages import (
     extract_body_from_attributed,
     find_contact_by_name,
     find_handles_by_phone,
+    get_addressbook_contacts,
     get_chat_mapping,
     get_contact_name,
     get_messages_db_path,
@@ -477,7 +478,8 @@ class TestTempFileRace(unittest.TestCase):
         script = mock_applescript.call_args[0][0]
         # Should NOT use the old hardcoded name
         self.assertNotIn("imessage_tmp.txt", script)
-        # Should reference a temp directory path
+        # Should reference a unique owner-only mkstemp path
+        self.assertIn("mac-messages-", script)
         self.assertTrue(
             "/tmp/" in script or "/var/folders/" in script,
             f"Expected temp directory path in script, got: {script[:200]}",
@@ -502,13 +504,14 @@ class TestTempFileRace(unittest.TestCase):
         ]
 
         # Count temp files before
-        before = set(glob.glob("/tmp/tmp*.txt"))
+        tmpdir = tempfile.gettempdir()
+        before = set(glob.glob(os.path.join(tmpdir, "mac-messages-*.txt")))
 
         # Run function
         _send_message_to_recipient("+15551234567", "test message")
 
         # Count temp files after - should not have leaked
-        after = set(glob.glob("/tmp/tmp*.txt"))
+        after = set(glob.glob(os.path.join(tmpdir, "mac-messages-*.txt")))
         leaked = after - before
         self.assertEqual(len(leaked), 0, f"Temp files leaked: {leaked}")
 
@@ -521,15 +524,66 @@ class TestTempFileRace(unittest.TestCase):
         mock_applescript.return_value = "Error: some failure"
 
         # Count temp files before
-        before = set(glob.glob("/tmp/tmp*.txt"))
+        tmpdir = tempfile.gettempdir()
+        before = set(glob.glob(os.path.join(tmpdir, "mac-messages-*.txt")))
 
         # Run function (will fall back to _send_message_direct which also uses applescript)
         _send_message_to_recipient("+15551234567", "test message")
 
         # Count temp files after
-        after = set(glob.glob("/tmp/tmp*.txt"))
+        after = set(glob.glob(os.path.join(tmpdir, "mac-messages-*.txt")))
         leaked = after - before
         self.assertEqual(len(leaked), 0, f"Temp files leaked: {leaked}")
+
+    @patch("mac_messages_mcp.messages.query_messages_db")
+    @patch("mac_messages_mcp.messages.run_applescript")
+    def test_temp_file_is_owner_only(self, mock_applescript, mock_query_db):
+        """mkstemp must create the message file as 0o600 before AppleScript reads it."""
+        import re
+        import stat
+
+        seen_mode = {}
+
+        def inspect_script(script):
+            match = re.search(r'POSIX file "([^"]+)"', script)
+            self.assertIsNotNone(match, script)
+            path = match.group(1)
+            seen_mode["path"] = path
+            seen_mode["mode"] = stat.S_IMODE(os.stat(path).st_mode)
+            return ""
+
+        mock_applescript.side_effect = inspect_script
+        mock_query_db.return_value = [
+            {
+                "guid": "abc",
+                "send_error": 0,
+                "is_sent": 1,
+                "is_delivered": 0,
+                "service": "iMessage",
+            }
+        ]
+
+        _send_message_to_recipient("+15551234567", "secret body")
+
+        self.assertIn("mac-messages-", os.path.basename(seen_mode["path"]))
+        self.assertEqual(seen_mode["mode"], 0o600)
+        self.assertFalse(os.path.exists(seen_mode["path"]))
+
+
+class TestAddressBookFallback(unittest.TestCase):
+    """Direct DB errors must not fall back to sqlite3 via shell=True."""
+
+    @patch.dict(os.environ, {}, clear=False)
+    @patch("mac_messages_mcp.messages.subprocess.run")
+    @patch("mac_messages_mcp.messages.query_addressbook_db")
+    def test_db_error_returns_empty_without_shell(self, mock_query, mock_run):
+        os.environ.pop("USE_TEST_DATA", None)
+        mock_query.return_value = [{"error": "Cannot access AddressBook database"}]
+
+        result = get_addressbook_contacts()
+
+        self.assertEqual(result, {})
+        mock_run.assert_not_called()
 
 
 class TestGetChatMapping(unittest.TestCase):

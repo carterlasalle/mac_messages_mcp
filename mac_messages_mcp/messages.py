@@ -4,7 +4,6 @@ Core functionality for interacting with macOS Messages app
 
 import difflib
 import glob
-import json
 import os
 import re
 import sqlite3
@@ -483,8 +482,7 @@ def get_addressbook_contacts() -> Dict[str, str]:
 
         if results and "error" in results[0]:
             print(f"Error getting AddressBook contacts: {results[0]['error']}")
-            # Fall back to subprocess method if direct DB access fails
-            return get_addressbook_contacts_subprocess()
+            return {}
 
         # Also query email addresses for email-based iMessage handles
         email_results = query_addressbook_db(email_query)
@@ -573,75 +571,6 @@ def process_contacts(contacts) -> Dict[str, str]:
     global _NAME_TO_NUMBERS_MAP, _PHONE_TO_DETAILS_MAP
     _NAME_TO_NUMBERS_MAP = name_to_numbers
     _PHONE_TO_DETAILS_MAP = phone_to_details
-
-    return contacts_map
-
-
-def get_addressbook_contacts_subprocess() -> Dict[str, str]:
-    """
-    Legacy method to get contacts using subprocess.
-    Only used as fallback when direct database access fails.
-    """
-    contacts_map = {}
-
-    try:
-        # Form the SQL query to execute via command line
-        cmd = """
-        sqlite3 ~/Library/"Application Support"/AddressBook/Sources/*/AddressBook-v22.abcddb<<EOF
-        .mode json
-        SELECT DISTINCT
-            ZABCDRECORD.ZFIRSTNAME [FIRST NAME],
-            ZABCDRECORD.ZLASTNAME [LAST NAME],
-            ZABCDPHONENUMBER.ZFULLNUMBER [FULL NUMBER]
-        FROM
-            ZABCDRECORD
-            LEFT JOIN ZABCDPHONENUMBER ON ZABCDRECORD.Z_PK = ZABCDPHONENUMBER.ZOWNER
-        ORDER BY
-            ZABCDRECORD.ZLASTNAME,
-            ZABCDRECORD.ZFIRSTNAME,
-            ZABCDPHONENUMBER.ZORDERINGINDEX ASC;
-        EOF
-        """
-
-        # Execute the command
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-
-        if result.returncode == 0:
-            # Parse the JSON output line by line (it's a series of JSON objects)
-            for line in result.stdout.strip().split("\n"):
-                if not line.strip():
-                    continue
-
-                # Remove trailing commas that might cause JSON parsing errors
-                line = line.rstrip(",")
-
-                try:
-                    contact = json.loads(line)
-                    first_name = contact.get("FIRST NAME", "")
-                    last_name = contact.get("LAST NAME", "")
-                    phone = contact.get("FULL NUMBER", "")
-
-                    # Process contact as in the main method
-                    if not phone:
-                        continue
-
-                    if "X-IMAGETYPE" in phone:
-                        phone = phone.split("X-IMAGETYPE")[0]
-
-                    full_name = " ".join(filter(None, [first_name, last_name]))
-                    if not full_name.strip():
-                        continue
-
-                    normalized_phone = contact_key(phone)
-                    if normalized_phone:
-                        contacts_map[normalized_phone] = full_name
-                except json.JSONDecodeError:
-                    # Skip individual lines that fail to parse
-                    continue
-    except Exception as e:
-        print(
-            f"Error getting AddressBook contacts via subprocess: {str(e)} PLEASE TELL THE USER TO GRANT FULL DISK ACCESS TO THE TERMINAL APPLICATION(CURSOR, TERMINAL, CLAUDE, ETC.) AND RESTART THE APPLICATION. DO NOT RETRY UNTIL NEXT MESSAGE."
-        )
 
     return contacts_map
 
@@ -965,14 +894,14 @@ def _send_message_to_recipient(
     safe_recipient = escape_applescript(recipient)
     file_path = None
     try:
-        # Create a unique temporary file with the message content
-        tmp = tempfile.NamedTemporaryFile(suffix=".txt", delete=False)
-        file_path = tmp.name
-        safe_file_path = escape_applescript(file_path)
+        # Owner-only temp file (mkstemp is 0o600). NamedTemporaryFile is
+        # world-readable on some systems and is flagged as CWE-377.
+        fd, file_path = tempfile.mkstemp(prefix="mac-messages-", suffix=".txt")
         try:
-            tmp.write(message.encode("utf-8"))
+            os.write(fd, message.encode("utf-8"))
         finally:
-            tmp.close()
+            os.close(fd)
+        safe_file_path = escape_applescript(file_path)
 
         # Adjust the AppleScript command based on whether this is a group chat
         if not group_chat:
