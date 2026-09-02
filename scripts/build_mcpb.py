@@ -32,9 +32,8 @@ from pathlib import Path
 
 # Pinned uv release for reproducible builds; override with --uv-version.
 DEFAULT_UV_VERSION = "0.11.19"
-UV_DOWNLOAD_URL = (
-    "https://github.com/astral-sh/uv/releases/download/{version}/{asset}.tar.gz"
-)
+UV_DOWNLOAD_PREFIX = "https://github.com/astral-sh/uv/releases/download/"
+UV_DOWNLOAD_URL = UV_DOWNLOAD_PREFIX + "{version}/{asset}.tar.gz"
 
 # Map architecture aliases to uv's macOS release asset names.
 ARCH_ASSETS = {
@@ -67,10 +66,15 @@ def resolve_asset(arch):
 
 
 def _download(url):
-    """Download a URL and return the raw bytes."""
+    """Download a GitHub uv release URL and return the raw bytes."""
+    if not url.startswith(UV_DOWNLOAD_PREFIX):
+        raise ValueError(f"refusing to download untrusted URL: {url}")
     print(f"Downloading {url}")
-    with urllib.request.urlopen(url) as response:  # noqa: S310 (trusted release URL)
+    request = urllib.request.Request(url, method="GET")
+    # fmt: off
+    with urllib.request.urlopen(request) as response:  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
         return response.read()
+    # fmt: on
 
 
 def vendor_uv(asset, version):
