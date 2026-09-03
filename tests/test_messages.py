@@ -11,12 +11,14 @@ from unittest.mock import MagicMock, patch
 
 from mac_messages_mcp.messages import (
     _check_imessage_availability,
+    _clean_text,
     _connect_sqlite_readonly,
     _find_chat_by_identifier,
     _format_phone_for_messages,
     _sanitize_message_body,
     _send_message_to_recipient,
     _verify_send_in_db,
+    clean_name,
     escape_applescript,
     extract_body_from_attributed,
     find_contact_by_name,
@@ -177,6 +179,20 @@ class TestEscapeAppleScriptInjection(unittest.TestCase):
 
         # Check results
         self.assertEqual(result, "Hello 世界")
+
+
+class TestCleanText(unittest.TestCase):
+    """Emoji stripping must not use an overly large regex range."""
+
+    def test_strips_emoticons_and_dingbats(self):
+        self.assertEqual(_clean_text("Hugo 😀 Example ✂"), "Hugo Example")
+
+    def test_preserves_cjk_and_latin_letters(self):
+        self.assertEqual(_clean_text("田中 太郎"), "田中 太郎")
+        self.assertEqual(_clean_text("José"), "José")
+
+    def test_clean_name_strips_punctuation_after_emoji(self):
+        self.assertEqual(clean_name("Alice 🎉!"), "Alice")
 
 
 class TestSanitizeMessageBody(unittest.TestCase):

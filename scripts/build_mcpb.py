@@ -20,6 +20,7 @@ downloads Python and dependencies, so network access is required once.
 """
 
 import hashlib
+import http.client
 import json
 import platform
 import shutil
@@ -27,13 +28,23 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import urllib.request
 from pathlib import Path
+from urllib.parse import urljoin, urlparse
 
 # Pinned uv release for reproducible builds; override with --uv-version.
 DEFAULT_UV_VERSION = "0.11.19"
 UV_DOWNLOAD_PREFIX = "https://github.com/astral-sh/uv/releases/download/"
 UV_DOWNLOAD_URL = UV_DOWNLOAD_PREFIX + "{version}/{asset}.tar.gz"
+_ALLOWED_DOWNLOAD_HOSTS = frozenset(
+    {
+        "github.com",
+        "objects.githubusercontent.com",
+        "github-releases.githubusercontent.com",
+        "release-assets.githubusercontent.com",
+    }
+)
+_DOWNLOAD_TIMEOUT_SECONDS = 60
+_MAX_DOWNLOAD_REDIRECTS = 8
 
 # Map architecture aliases to uv's macOS release asset names.
 ARCH_ASSETS = {
@@ -70,11 +81,48 @@ def _download(url):
     if not url.startswith(UV_DOWNLOAD_PREFIX):
         raise ValueError(f"refusing to download untrusted URL: {url}")
     print(f"Downloading {url}")
-    request = urllib.request.Request(url, method="GET")
-    # fmt: off
-    with urllib.request.urlopen(request) as response:  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
-        return response.read()
-    # fmt: on
+    return _https_get_allowlisted(url)
+
+
+def _https_get_allowlisted(url):
+    """GET `url` over HTTPS, following redirects only to known GitHub hosts."""
+    current = url
+    for _ in range(_MAX_DOWNLOAD_REDIRECTS):
+        parsed = urlparse(current)
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.hostname not in _ALLOWED_DOWNLOAD_HOSTS
+        ):
+            raise ValueError(f"refusing to download untrusted URL: {current}")
+        path = parsed.path or "/"
+        if parsed.query:
+            path = f"{path}?{parsed.query}"
+        connection = http.client.HTTPSConnection(
+            parsed.hostname, timeout=_DOWNLOAD_TIMEOUT_SECONDS
+        )
+        try:
+            connection.request(
+                "GET",
+                path,
+                headers={"User-Agent": "mac-messages-mcp-mcpb-builder"},
+            )
+            response = connection.getresponse()
+            if response.status in (301, 302, 303, 307, 308):
+                location = response.getheader("Location")
+                response.read()
+                if not location:
+                    raise ValueError(f"redirect without Location from {current}")
+                current = urljoin(current, location)
+                continue
+            if response.status != 200:
+                raise ValueError(
+                    f"download failed: HTTP {response.status} for {current}"
+                )
+            return response.read()
+        finally:
+            connection.close()
+    raise ValueError(f"too many redirects downloading {url}")
 
 
 def vendor_uv(asset, version):

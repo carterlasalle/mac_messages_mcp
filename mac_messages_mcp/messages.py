@@ -251,21 +251,34 @@ _CONTACTS_CACHE = None
 _LAST_CACHE_UPDATE = 0
 _CACHE_TTL = 300  # 5 minutes in seconds
 
-_EMOJI_PATTERN = re.compile(
-    "["
-    "\U0001f600-\U0001f64f"  # emoticons
-    "\U0001f300-\U0001f5ff"  # symbols & pictographs
-    "\U0001f680-\U0001f6ff"  # transport & map symbols
-    "\U0001f700-\U0001f77f"  # alchemical symbols
-    "\U0001f780-\U0001f7ff"  # Geometric Shapes
-    "\U0001f800-\U0001f8ff"  # Supplemental Arrows-C
-    "\U0001f900-\U0001f9ff"  # Supplemental Symbols and Pictographs
-    "\U0001fa00-\U0001fa6f"  # Chess Symbols
-    "\U0001fa70-\U0001faff"  # Symbols and Pictographs Extended-A
-    "\U00002702-\U000027b0"  # Dingbats
-    "\U000024c2-\U0001f251"
-    "]+"
+# Inclusive (start, end) code-point ranges for characters stripped as emoji.
+# Kept as ordinal comparisons so CodeQL py/overly-large-range does not treat
+# supplementary-plane regex ranges as overlapping U+FFFD, and so the old
+# catch-all U+24C2–U+1F251 span cannot swallow CJK and other non-emoji text.
+_EMOJI_ORDINAL_RANGES = (
+    (0x1F600, 0x1F64F),  # emoticons
+    (0x1F300, 0x1F5FF),  # symbols & pictographs
+    (0x1F680, 0x1F6FF),  # transport & map symbols
+    (0x1F700, 0x1F77F),  # alchemical symbols
+    (0x1F780, 0x1F7FF),  # geometric shapes extended
+    (0x1F800, 0x1F8FF),  # supplemental arrows-C
+    (0x1F900, 0x1F9FF),  # supplemental symbols and pictographs
+    (0x1FA00, 0x1FA6F),  # chess symbols
+    (0x1FA70, 0x1FAFF),  # symbols and pictographs extended-A
+    (0x2702, 0x27B0),  # dingbats
+    (0x2600, 0x26FF),  # miscellaneous symbols (☀, ⚡, ♥, …)
+    (0x24C2, 0x24C2),  # circled M
+    (0x1F170, 0x1F251),  # enclosed alphanumeric supplement through 🉑
 )
+
+
+def _is_emoji_codepoint(codepoint: int) -> bool:
+    return any(start <= codepoint <= end for start, end in _EMOJI_ORDINAL_RANGES)
+
+
+def _strip_emoji(text: str) -> str:
+    return "".join(ch for ch in text if not _is_emoji_codepoint(ord(ch)))
+
 
 _MAX_MESSAGE_BODY_CHARS = 4_000
 
@@ -279,7 +292,7 @@ def _clean_text(text: str, strip_punctuation: bool = False) -> str:
             alphanumeric, whitespace, apostrophes, or hyphens (used for
             contact-name matching).
     """
-    text = _EMOJI_PATTERN.sub("", text)
+    text = _strip_emoji(text)
     if strip_punctuation:
         text = re.sub(r"[^\w\s\'\-]", "", text, flags=re.UNICODE)
     text = re.sub(r"\s+", " ", text).strip()
