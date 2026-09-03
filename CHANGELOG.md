@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- GitHub Actions workflows now declare read-only `GITHUB_TOKEN` permissions at the workflow level and grant write scopes only on the jobs that upload SARIF, submit SBOMs, comment on PRs, or publish releases.
+- Contact/message text cleaning no longer uses a regex character class spanning U+24C2–U+1F251, which CodeQL flagged as an overly permissive range and which also stripped CJK.
+- The MCPB builder fetches `uv` over HTTPS with an allowlisted redirect host set instead of `urllib.request.urlopen`.
+- Added a bounded Atheris harness for phone/handle parsers (`fuzz/fuzz_phone.py`).
+
 ## [1.1.0] - 2026-09-01
 
 ### Security

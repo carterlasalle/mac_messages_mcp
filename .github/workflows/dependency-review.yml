@@ -20,11 +20,12 @@ on:
 # https://docs.github.com/en/enterprise-cloud@latest/code-security/supply-chain-security/understanding-your-software-supply-chain/using-the-dependency-submission-api
 permissions:
   contents: read
-  # Write permissions for pull-requests are required for using the `comment-summary-in-pr` option, comment out if you aren't using this option
-  pull-requests: write
 
 jobs:
   dependency-review:
+    permissions:
+      contents: read
+      pull-requests: write # comment-summary-in-pr
     runs-on: ubuntu-latest
     steps:
       - name: "Checkout repository"
