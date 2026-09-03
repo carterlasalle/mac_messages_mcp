@@ -34,4 +34,4 @@ jobs:
           set -euo pipefail
           uv venv --python 3.13
           uv pip install atheris phonenumbers
-          uv run python fuzz/fuzz_phone.py -runs=2048
+          .venv/bin/python fuzz/fuzz_phone.py -runs=2048
