@@ -13,6 +13,7 @@ from mac_messages_mcp.messages import (
     _check_imessage_availability,
     _clean_text,
     _connect_sqlite_readonly,
+    _find_chat_by_display_name,
     _find_chat_by_identifier,
     _format_phone_for_messages,
     _sanitize_message_body,
@@ -27,11 +28,13 @@ from mac_messages_mcp.messages import (
     get_chat_mapping,
     get_contact_name,
     get_messages_db_path,
+    get_recent_contact_matches,
     get_recent_messages,
     process_contacts,
     query_messages_db,
     run_applescript,
     send_message,
+    set_recent_contact_matches,
 )
 from tests.test_phone import region_pinned
 
@@ -688,7 +691,7 @@ class TestGetRecentMessagesChatFilter(unittest.TestCase):
     @patch("mac_messages_mcp.messages.get_contact_name", return_value="Alice")
     @patch(
         "mac_messages_mcp.messages._find_chat_by_identifier",
-        return_value={"ROWID": 7, "display_name": "Family"},
+        return_value={"ROWID": 7, "display_name": "Family", "style": 43},
     )
     @patch("mac_messages_mcp.messages.query_messages_db")
     def test_get_recent_messages_filters_by_chat_id(
@@ -713,6 +716,39 @@ class TestGetRecentMessagesChatFilter(unittest.TestCase):
         self.assertEqual(params[-1], 7)
         self.assertIn("[Family]", result)
         self.assertIn("group hello", result)
+
+    @patch("mac_messages_mcp.messages._attachments_for_message_ids", return_value={})
+    @patch("mac_messages_mcp.messages.get_chat_mapping", return_value={})
+    @patch("mac_messages_mcp.messages.get_contact_name", return_value="Poke")
+    @patch(
+        "mac_messages_mcp.messages._find_chat_by_identifier",
+        return_value={
+            "ROWID": 2264,
+            "display_name": "Poke",
+            "style": 45,
+        },
+    )
+    @patch("mac_messages_mcp.messages.query_messages_db")
+    def test_business_chat_gets_no_name_prefix(
+        self, mock_query, _chat, _name, _mapping, _atts
+    ):
+        """1:1/business chats (style 45) must not prefix lines with [Name]."""
+        mock_query.return_value = [
+            {
+                "ROWID": 101,
+                "date": 700_000_000_000_000_000,
+                "text": "biz hello",
+                "attributedBody": None,
+                "is_from_me": 0,
+                "handle_id": 99,
+                "cache_roomnames": None,
+            }
+        ]
+
+        result = get_recent_messages(hours=24, chat_id="urn:biz:6e67a89b")
+
+        self.assertNotIn("[Poke]", result)
+        self.assertIn("biz hello", result)
 
     def test_get_recent_messages_rejects_contact_and_chat_id(self):
         result = get_recent_messages(hours=24, contact="Alice", chat_id="chat123")
@@ -1108,6 +1144,120 @@ class TestAddressBookShortCodeRegression(unittest.TestCase):
             name = get_contact_name(1)
 
         self.assertEqual(name, "Hugo Example")
+
+
+class TestSharedContactMatchStore(unittest.TestCase):
+    """contact:N selectors resolve across tools from one shared store.
+
+    Regression: tool_find_contact printed numbered selectors but never stored
+    them, and send_message / get_recent_messages kept disjoint per-function
+    caches, so the documented contact:N flow could never resolve.
+    """
+
+    def setUp(self):
+        set_recent_contact_matches([])
+
+    def tearDown(self):
+        set_recent_contact_matches([])
+
+    def test_store_round_trip(self):
+        matches = [
+            {"name": "Ann Example", "phone": "+10000000001", "score": 0.9},
+            {"name": "Anya Example", "phone": "+10000000002", "score": 0.8},
+        ]
+        set_recent_contact_matches(matches)
+        self.assertEqual(get_recent_contact_matches(), matches)
+
+    def test_store_caps_to_displayed_entries(self):
+        matches = [
+            {"name": f"Person {i}", "phone": f"+100000000{i:02d}", "score": 0.5}
+            for i in range(15)
+        ]
+        set_recent_contact_matches(matches)
+        self.assertEqual(len(get_recent_contact_matches()), 10)
+
+    @patch("mac_messages_mcp.messages._send_message_to_recipient")
+    def test_send_message_resolves_shared_store_selector(self, mock_send):
+        mock_send.return_value = "sent"
+        set_recent_contact_matches(
+            [
+                {"name": "Ann Example", "phone": "+10000000001", "score": 0.9},
+                {"name": "Anya Example", "phone": "+10000000002", "score": 0.8},
+            ]
+        )
+        send_message("contact:2", "hello")
+        mock_send.assert_called_once_with(
+            "+10000000002", "hello", "Anya Example", group_chat=False
+        )
+
+
+class TestChatDisplayNameFallback(unittest.TestCase):
+    """contact= falls back to chat.display_name for named non-AddressBook chats."""
+
+    @patch("mac_messages_mcp.messages.query_messages_db")
+    def test_find_chat_by_display_name_exact_match(self, mock_query):
+        mock_query.return_value = [
+            {
+                "ROWID": 2264,
+                "display_name": "Poke",
+                "chat_identifier": "urn:biz:6e67a89b",
+            }
+        ]
+        row = _find_chat_by_display_name("poke")
+        self.assertEqual(row["ROWID"], 2264)
+        sql, params = mock_query.call_args[0]
+        self.assertIn("display_name", sql)
+        self.assertEqual(params, ("poke",))
+
+    @patch("mac_messages_mcp.messages.query_messages_db")
+    def test_find_chat_by_display_name_no_match(self, mock_query):
+        mock_query.return_value = []
+        self.assertIsNone(_find_chat_by_display_name("Nobody"))
+
+    @patch("mac_messages_mcp.messages.query_messages_db")
+    def test_find_chat_by_display_name_ambiguous(self, mock_query):
+        mock_query.return_value = [
+            {"ROWID": 1, "display_name": "Fam", "chat_identifier": "chat1"},
+            {"ROWID": 2, "display_name": "Fam", "chat_identifier": "chat2"},
+        ]
+        rows = _find_chat_by_display_name("Fam")
+        self.assertIsInstance(rows, list)
+        self.assertEqual(len(rows), 2)
+
+
+class TestAttachmentPlaceholderBody(unittest.TestCase):
+    """U+FFFD-only bodies (attachments/buttons) render as [attachment]."""
+
+    def test_replacement_chars_detected(self):
+        from mac_messages_mcp.messages import _is_attachment_placeholder_body
+
+        self.assertTrue(_is_attachment_placeholder_body("\ufffd"))
+        self.assertTrue(_is_attachment_placeholder_body("  \ufffd\ufffd  "))
+        self.assertFalse(_is_attachment_placeholder_body("hello \ufffd world"))
+        self.assertFalse(_is_attachment_placeholder_body(""))
+        self.assertFalse(_is_attachment_placeholder_body(None))
+
+    @patch("mac_messages_mcp.messages._attachments_for_message_ids", return_value={})
+    @patch("mac_messages_mcp.messages.get_chat_mapping", return_value={})
+    @patch("mac_messages_mcp.messages.get_contact_name", return_value="Poke")
+    @patch("mac_messages_mcp.messages.query_messages_db")
+    def test_recent_renders_attachment_placeholder(
+        self, mock_query, _name, _mapping, _atts
+    ):
+        mock_query.return_value = [
+            {
+                "ROWID": 1,
+                "date": 700_000_000_000_000_000,
+                "text": "\ufffd",
+                "attributedBody": None,
+                "is_from_me": 0,
+                "handle_id": 99,
+                "cache_roomnames": None,
+            }
+        ]
+        result = get_recent_messages(hours=24)
+        self.assertIn("[attachment]", result)
+        self.assertNotIn("\ufffd", result)
 
 
 if __name__ == "__main__":

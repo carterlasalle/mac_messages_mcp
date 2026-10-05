@@ -81,7 +81,11 @@ def escape_applescript(value: str) -> str:
 
 def get_chat_mapping() -> Dict[str, str]:
     """
-    Get mapping from room_name to display_name in chat table.
+    Get mapping from room_name to display_name for group chats (style 43).
+
+    1:1 and business chats (style 45) carry a display_name too, but prefixing
+    their messages with it misattributes the thread (e.g. "[Poke] You:").
+    Only group chats get the "[Name]" prefix.
 
     Returns an empty dict if the database is inaccessible or locked.
     """
@@ -89,7 +93,11 @@ def get_chat_mapping() -> Dict[str, str]:
     try:
         conn = _connect_sqlite_readonly(get_messages_db_path())
         cursor = conn.cursor()
-        cursor.execute("SELECT room_name, display_name FROM chat")
+        try:
+            cursor.execute("SELECT room_name, display_name FROM chat WHERE style = 43")
+        except sqlite3.OperationalError:
+            # Schema without style (older DBs / minimal test fixtures).
+            cursor.execute("SELECT room_name, display_name FROM chat")
         result_set = cursor.fetchall()
         return {room_name: display_name for room_name, display_name in result_set}
     except Exception as e:
@@ -174,6 +182,19 @@ def extract_body_from_attributed(attributed_body):
 
     except Exception:
         return None
+
+
+def _is_attachment_placeholder_body(body: Optional[str]) -> bool:
+    """True when a decoded body is only U+FFFD replacement characters.
+
+    Attachment/button messages store no readable string in text or
+    attributedBody; the typedstream decode yields replacement chars that are
+    truthy but carry no content. Render those as [attachment] instead.
+    """
+    if not body:
+        return False
+    stripped = body.strip()
+    return bool(stripped) and all(ch == "\ufffd" for ch in stripped)
 
 
 def get_messages_db_path() -> str:
@@ -658,6 +679,26 @@ def find_contact_by_name(name: str) -> List[Dict[str, Any]]:
     return results
 
 
+# Shared disambiguation store for `contact:N` selectors.
+# Previously each consumer kept its own function-attribute cache
+# (`send_message.recent_matches`, `get_recent_messages.recent_matches`) and
+# `tool_find_contact` wrote to neither, so a selector printed by one tool
+# could never resolve in another. One module-level list, capped to the
+# entries actually shown to the user (<=10).
+_recent_contact_matches: List[Dict[str, Any]] = []
+
+
+def set_recent_contact_matches(matches: List[Dict[str, Any]]) -> None:
+    """Record the disambiguation list shown to the user."""
+    global _recent_contact_matches
+    _recent_contact_matches = list(matches[:10])
+
+
+def get_recent_contact_matches() -> List[Dict[str, Any]]:
+    """Return the last disambiguation list shown to the user."""
+    return _recent_contact_matches
+
+
 def send_message(recipient: str, message: str, group_chat: bool = False) -> str:
     """
     Send a message using the Messages app with improved contact resolution.
@@ -686,18 +727,17 @@ def send_message(recipient: str, message: str, group_chat: bool = False) -> str:
             # Get the selected index (1-based)
             index = int(recipient.split(":", 1)[1].strip()) - 1
 
-            # Get the most recent contact matches from global cache
-            if (
-                not hasattr(send_message, "recent_matches")
-                or not send_message.recent_matches
-            ):
+            # Get the most recent contact matches from the shared store
+            # (populated by tool_find_contact, send_message, get_recent_messages)
+            recent_matches = get_recent_contact_matches()
+            if not recent_matches:
                 return "No recent contact matches available. Please search for a contact first."
 
-            if index < 0 or index >= len(send_message.recent_matches):
-                return f"Invalid selection. Please choose a number between 1 and {len(send_message.recent_matches)}."
+            if index < 0 or index >= len(recent_matches):
+                return f"Invalid selection. Please choose a number between 1 and {len(recent_matches)}."
 
             # Get the selected contact
-            contact = send_message.recent_matches[index]
+            contact = recent_matches[index]
             return _send_message_to_recipient(
                 contact["phone"], message, contact["name"], group_chat=False
             )
@@ -733,8 +773,8 @@ def send_message(recipient: str, message: str, group_chat: bool = False) -> str:
             contact["phone"], message, contact["name"], group_chat=False
         )
     else:
-        # Store the matches for later selection
-        send_message.recent_matches = contacts
+        # Store the matches for later selection (shared contact:N store)
+        set_recent_contact_matches(contacts)
 
         # Multiple matches, return them all
         contact_list = "\n".join(
@@ -749,10 +789,6 @@ def send_message(recipient: str, message: str, group_chat: bool = False) -> str:
             f"'{neutralize_untrusted_text(recipient)}'. Please specify which one "
             f"using 'contact:N' where N is the number:\n{contact_list}"
         )
-
-
-# Initialize the static variable for recent matches
-send_message.recent_matches = []
 
 
 APPLE_EPOCH_OFFSET = 978307200  # seconds between the unix epoch and 2001-01-01
@@ -1034,7 +1070,7 @@ def _find_chat_by_identifier(chat_id: str) -> Optional[Dict[str, Any]]:
 
     placeholders = ", ".join(["?" for _ in variants])
     query = f"""
-    SELECT ROWID, display_name, chat_identifier, room_name
+    SELECT ROWID, display_name, chat_identifier, room_name, style
     FROM chat
     WHERE chat_identifier IN ({placeholders})
        OR room_name IN ({placeholders})
@@ -1045,6 +1081,42 @@ def _find_chat_by_identifier(chat_id: str) -> Optional[Dict[str, Any]]:
     if not rows or "error" in rows[0]:
         return None
     return rows[0]
+
+
+def _find_chat_by_display_name(
+    name: str,
+) -> Optional[Dict[str, Any] | List[Dict[str, Any]]]:
+    """Find Messages chat rows by display name (groups and 1:1/business chats).
+
+    Returns the single matching row, a list when the name is ambiguous, or
+    None when nothing matches. Exact case-insensitive match.
+    """
+    name = str(name).strip()
+    if not name:
+        return None
+    rows = query_messages_db(
+        "SELECT ROWID, display_name, chat_identifier, style FROM chat "
+        "WHERE display_name = ? COLLATE NOCASE LIMIT 2",
+        (name,),
+    )
+    if not rows or "error" in rows[0]:
+        return None
+    if len(rows) == 1:
+        return rows[0]
+    return rows
+
+
+# AddressBook matches below this score are fuzzy-floor noise, outranked by an
+# exact chat display-name match. Genuine hits score 0.80+ (exact token 0.95,
+# prefix 0.80-0.85); see fuzzy_match.
+_WEAK_MATCH_CEILING = 0.70
+
+
+def _all_weak_matches(matches: List[Dict[str, Any]]) -> bool:
+    """True when every AddressBook match scores at or below the noise ceiling."""
+    return bool(matches) and all(
+        m.get("score", 0) <= _WEAK_MATCH_CEILING for m in matches
+    )
 
 
 @bound_untrusted_output
@@ -1080,6 +1152,7 @@ def get_recent_messages(
     handle_ids = None
     chat_row_id = None
     chat_display_name = None
+    chat_is_group = False
 
     if chat_id:
         chat_id = str(chat_id).strip()
@@ -1090,6 +1163,9 @@ def get_recent_messages(
             return f"No group chat found with chat_id '{chat_id}'. Use tool_get_chats to list available group chats."
         chat_row_id = chat["ROWID"]
         chat_display_name = chat.get("display_name") or chat_id
+        # Only group chats (style 43) get the "[Name]" prefix; 1:1 and
+        # business chats (style 45) would misattribute the thread.
+        chat_is_group = chat.get("style") == 43
 
     # If contact is specified, try to resolve it
     if contact:
@@ -1114,18 +1190,17 @@ def get_recent_messages(
                 if index < 0:
                     return "Error: Contact selection must be a positive number (starting from 1)."
 
-                # Get the most recent contact matches from global cache
-                if (
-                    not hasattr(get_recent_messages, "recent_matches")
-                    or not get_recent_messages.recent_matches
-                ):
+                # Get the most recent contact matches from the shared store
+                # (populated by tool_find_contact, send_message, get_recent_messages)
+                recent_matches = get_recent_contact_matches()
+                if not recent_matches:
                     return "No recent contact matches available. Please search for a contact first."
 
-                if index >= len(get_recent_messages.recent_matches):
-                    return f"Invalid selection. Please choose a number between 1 and {len(get_recent_messages.recent_matches)}."
+                if index >= len(recent_matches):
+                    return f"Invalid selection. Please choose a number between 1 and {len(recent_matches)}."
 
                 # Get the selected contact's phone number
-                contact = get_recent_messages.recent_matches[index]["phone"]
+                contact = recent_matches[index]["phone"]
             except Exception as e:
                 return f"Error processing contact selection: {str(e)}"
 
@@ -1141,15 +1216,37 @@ def get_recent_messages(
             # Try fuzzy matching
             matches = find_contact_by_name(contact)
 
-            if not matches:
-                return f"No contacts found matching '{contact}'."
+            # An exact chat display-name match outranks weak AddressBook noise:
+            # genuine name hits score 0.80+ (exact token 0.95, prefix 0.80+),
+            # so AddressBook hits all near the 0.60 floor alongside an exact
+            # chat match (e.g. "Poke" vs two unrelated humans) mean the chat.
+            chat_match = None
+            if not matches or _all_weak_matches(matches):
+                chat_match = _find_chat_by_display_name(contact)
 
-            if len(matches) == 1:
+            if chat_match is not None and not isinstance(chat_match, list):
+                chat_row_id = chat_match["ROWID"]
+                chat_display_name = chat_match.get("display_name") or contact
+                chat_is_group = chat_match.get("style") == 43
+            elif chat_match is not None and not matches:
+                chat_list = "\n".join(
+                    [
+                        f"{i+1}. {c['display_name']} (chat ID: {c['chat_identifier']})"
+                        for i, c in enumerate(chat_match)
+                    ]
+                )
+                return (
+                    f"Multiple chats found matching '{contact}'. Please specify "
+                    f"which one using 'chat_id' from tool_get_chats:\n{chat_list}"
+                )
+            elif not matches:
+                return f"No contacts found matching '{contact}'."
+            elif len(matches) == 1:
                 # Single match, use its phone number
                 contact = matches[0]["phone"]
             else:
-                # Store the matches for later selection
-                get_recent_messages.recent_matches = matches
+                # Store the matches for later selection (shared contact:N store)
+                set_recent_contact_matches(matches)
 
                 # Multiple matches, return them all
                 contact_list = "\n".join(
@@ -1163,44 +1260,45 @@ def get_recent_messages(
                     f"which one using 'contact:N' where N is the number:\n{contact_list}"
                 )
 
-        # At this point, contact should be a phone number or email
-        # Try to find handle_ids with improved phone number matching
-        if "@" in contact:
-            # This is an email. Fold the case on both sides: handle.id compares
-            # case-sensitively, and the canonical form is lowercased.
-            query = "SELECT ROWID FROM handle WHERE id = ? COLLATE NOCASE"
-            results = query_messages_db(
-                query, (canonical_handle(contact) or contact.strip(),)
-            )
-            if results and not "error" in results[0] and len(results) > 0:
-                handle_ids = [row["ROWID"] for row in results]
-        else:
-            # This is a phone number - try various formats (returns all handles for multi-protocol)
-            handle_ids = find_handles_by_phone(contact)
-
-        if not handle_ids:
-            # Try a direct search in message table to see if any messages exist.
-            # Match on the digits of the canonical number so that a national
-            # input still finds a handle stored in international format.
-            normalized = digits_only(canonical_handle(contact) or contact)
-            query = """
-            SELECT COUNT(*) as count 
-            FROM message m
-            JOIN handle h ON m.handle_id = h.ROWID
-            WHERE h.id LIKE ?
-            """
-            results = query_messages_db(query, (f"%{normalized}%",))
-
-            if (
-                results
-                and not "error" in results[0]
-                and results[0].get("count", 0) == 0
-            ):
-                # No messages found but the query was valid
-                return f"No message history found with '{contact}'."
+        # At this point, contact should be a phone number or email, unless the
+        # chat display-name fallback above already resolved it (chat_row_id set).
+        if chat_row_id is None:
+            if "@" in contact:
+                # This is an email. Fold the case on both sides: handle.id compares
+                # case-sensitively, and the canonical form is lowercased.
+                query = "SELECT ROWID FROM handle WHERE id = ? COLLATE NOCASE"
+                results = query_messages_db(
+                    query, (canonical_handle(contact) or contact.strip(),)
+                )
+                if results and not "error" in results[0] and len(results) > 0:
+                    handle_ids = [row["ROWID"] for row in results]
             else:
-                # Could not find the handle at all
-                return f"Could not find any messages with contact '{contact}'. Verify the phone number or email is correct."
+                # This is a phone number - try various formats (returns all handles for multi-protocol)
+                handle_ids = find_handles_by_phone(contact)
+
+            if not handle_ids:
+                # Try a direct search in message table to see if any messages exist.
+                # Match on the digits of the canonical number so that a national
+                # input still finds a handle stored in international format.
+                normalized = digits_only(canonical_handle(contact) or contact)
+                query = """
+                SELECT COUNT(*) as count 
+                FROM message m
+                JOIN handle h ON m.handle_id = h.ROWID
+                WHERE h.id LIKE ?
+                """
+                results = query_messages_db(query, (f"%{normalized}%",))
+
+                if (
+                    results
+                    and not "error" in results[0]
+                    and results[0].get("count", 0) == 0
+                ):
+                    # No messages found but the query was valid
+                    return f"No message history found with '{contact}'."
+                else:
+                    # Could not find the handle at all
+                    return f"Could not find any messages with contact '{contact}'. Verify the phone number or email is correct."
 
     # Calculate the timestamp for X hours ago
     hours_ago = datetime.now(timezone.utc) - timedelta(hours=hours)
@@ -1267,6 +1365,8 @@ def get_recent_messages(
         else:
             # Skip empty messages
             continue
+        if _is_attachment_placeholder_body(body):
+            body = "[attachment]"
 
         # Convert Apple timestamp to readable date
         try:
@@ -1283,7 +1383,7 @@ def get_recent_messages(
         group_chat_name = None
         if msg.get("cache_roomnames"):
             group_chat_name = chat_mapping.get(msg["cache_roomnames"])
-        if not group_chat_name and chat_display_name:
+        if not group_chat_name and chat_display_name and chat_is_group:
             group_chat_name = chat_display_name
 
         message_prefix = f"[{date_str}]"
@@ -1302,10 +1402,6 @@ def get_recent_messages(
         return "No messages found in the specified time period."
 
     return "\n".join(formatted_messages)
-
-
-# Initialize the static variable for recent matches
-get_recent_messages.recent_matches = []
 
 
 # Maximum number of messages returned by a single fuzzy search query.
@@ -1463,7 +1559,8 @@ def fuzzy_search_messages(
             or extract_body_from_attributed(msg_dict.get("attributedBody"))
             or "[No displayable content]"
         )
-
+        if _is_attachment_placeholder_body(original_body):
+            original_body = "[attachment]"
         date_val = _from_apple_ns(int(msg_dict["date"]))
         date_str = date_val.astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
