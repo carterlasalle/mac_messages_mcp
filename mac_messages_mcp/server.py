@@ -24,6 +24,7 @@ from mac_messages_mcp.messages import (
     query_messages_db,
     search_attachments,
     send_message,
+    set_recent_contact_matches,
 )
 from mac_messages_mcp.untrusted import (
     UNTRUSTED_OUTPUT_POLICY,
@@ -193,7 +194,9 @@ def tool_find_contact(
             contact = matches[0]
             return f"Found contact: {contact['name']} ({contact['phone']}) with confidence {contact['score']:.2f}"
         else:
-            # Format multiple matches
+            # Populate the shared contact:N store so the printed selectors resolve
+            # in tool_send_message and tool_get_recent_messages.
+            set_recent_contact_matches(matches)
             result = [f"Found {len(matches)} contacts matching '{name}':"]
             for i, contact in enumerate(matches[:10]):  # Limit to top 10
                 result.append(
