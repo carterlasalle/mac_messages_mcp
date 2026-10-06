@@ -2643,6 +2643,81 @@ def _heic_to_png_bytes(heic_bytes: bytes) -> bytes | None:
         return None
 
 
+def _load_attachment_row(attachment_id: int) -> tuple[dict[str, Any] | None, str]:
+    """Return ``(shaped_row, error_message)`` for one attachment ROWID.
+
+    ``shaped_row`` is None when the query fails or the ROWID is absent, in
+    which case ``error_message`` explains the failure; otherwise
+    ``error_message`` is empty.
+    """
+    rows = query_messages_db(
+        f"""
+        SELECT
+            {_ATTACHMENT_SELECT_COLS},
+            m.is_from_me AS is_from_me,
+            m.handle_id AS handle_id
+        FROM message_attachment_join maj
+        JOIN attachment a ON a.ROWID = maj.attachment_id
+        JOIN message m ON m.ROWID = maj.message_id
+        WHERE a.ROWID = ?
+        LIMIT 1
+        """,
+        (attachment_id,),
+    )
+
+    if rows and "error" in rows[0]:
+        return None, f"Error querying attachment: {rows[0]['error']}"
+    if not rows:
+        return None, f"Attachment {attachment_id} not found."
+    return _shape_attachment(rows[0]), ""
+
+
+def _format_attachment_metadata(
+    attachment_id: int,
+    shaped: dict[str, Any],
+) -> tuple[str, str | None]:
+    """Return ``(summary_line, resolved_path)`` for a shaped attachment row.
+
+    ``resolved_path`` is None when the row records no filename or the file is
+    missing on disk, in which case ``summary_line`` explains why.
+    """
+    path = shaped["path"]
+    mime = (shaped["mime_type"] or "").lower()
+
+    if not path:
+        return f"Attachment {attachment_id}: no filename recorded in database.", None
+
+    if not Path(path).exists():
+        return (
+            f"Attachment {attachment_id} ({shaped['filename']}, {mime or 'unknown'}): "
+            f"missing on disk at {path}",
+            None,
+        )
+
+    size_kb = (shaped["size_bytes"] or Path(path).stat().st_size) / 1024
+    return (
+        f"Attachment {attachment_id}: {mime or 'unknown'} | "
+        f"{shaped['filename']} | {size_kb:.1f} KB | path: {path}",
+        path,
+    )
+
+
+def _describe_attachment(attachment_id: int) -> tuple[str, str | None]:
+    """Summarize one attachment without reading its bytes.
+
+    Returns ``(summary_line, resolved_path)``. ``resolved_path`` is None when
+    the row is absent, records no filename, or the file is missing on disk;
+    ``summary_line`` then carries the status or access error. Used by the
+    terminal CLI, which prints the summary and may copy the file, without
+    materializing inline image payloads.
+
+    """
+    shaped, error = _load_attachment_row(attachment_id)
+    if shaped is None:
+        return error, None
+    return _format_attachment_metadata(attachment_id, shaped)
+
+
 @bound_untrusted_output
 def get_attachment(
     attachment_id: int,
@@ -2665,45 +2740,14 @@ def get_attachment(
           errors.
 
     """
-    rows = query_messages_db(
-        f"""
-        SELECT
-            {_ATTACHMENT_SELECT_COLS},
-            m.is_from_me AS is_from_me,
-            m.handle_id AS handle_id
-        FROM message_attachment_join maj
-        JOIN attachment a ON a.ROWID = maj.attachment_id
-        JOIN message m ON m.ROWID = maj.message_id
-        WHERE a.ROWID = ?
-        LIMIT 1
-        """,
-        (attachment_id,),
-    )
+    shaped, error = _load_attachment_row(attachment_id)
+    if shaped is None:
+        return error
 
-    if rows and "error" in rows[0]:
-        return f"Error querying attachment: {rows[0]['error']}"
-    if not rows:
-        return f"Attachment {attachment_id} not found."
-
-    row = rows[0]
-    shaped = _shape_attachment(row)
-    path = shaped["path"]
+    metadata_text, path = _format_attachment_metadata(attachment_id, shaped)
+    if path is None:
+        return metadata_text
     mime = (shaped["mime_type"] or "").lower()
-
-    if not path:
-        return f"Attachment {attachment_id}: no filename recorded in database."
-
-    if not Path(path).exists():
-        return (
-            f"Attachment {attachment_id} ({shaped['filename']}, {mime or 'unknown'}): "
-            f"missing on disk at {path}"
-        )
-
-    size_kb = (shaped["size_bytes"] or Path(path).stat().st_size) / 1024
-    metadata_text = (
-        f"Attachment {attachment_id}: {mime or 'unknown'} | "
-        f"{shaped['filename']} | {size_kb:.1f} KB | path: {path}"
-    )
 
     # Non-image: path-only return so the caller can read with their own tools.
     if mime not in _INLINE_IMAGE_MIMES:

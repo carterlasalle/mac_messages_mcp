@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from mac_messages_mcp.messages import (
     _attachments_for_message_ids,
+    _describe_attachment,
     _filter_excluded_attachments,
     _format_attachment_summary,
     fuzzy_search_messages,
@@ -330,6 +331,52 @@ def test_jpeg_returns_path_and_image(mock_query):
     assert "path:" in text
     assert "photo.jpg" in text
     assert str(attachment) in text
+
+
+@patch("mac_messages_mcp.messages.query_messages_db")
+def test_describe_attachment_returns_summary_and_path(mock_query, tmp_path):
+    attachment = tmp_path / "invitation.pdf"
+    attachment.write_bytes(b"%PDF-1.4\n")
+    mock_query.return_value = [
+        make_attachment_row(
+            rowid=42,
+            filename=str(attachment),
+            mime_type="application/pdf",
+            transfer_name="invitation.pdf",
+            total_bytes=9,
+        ),
+    ]
+
+    summary, path = _describe_attachment(42)
+
+    assert path == str(attachment)
+    assert "invitation.pdf" in summary
+    assert str(attachment) in summary
+
+
+@patch("mac_messages_mcp.messages.query_messages_db")
+def test_describe_attachment_missing_file_has_no_path(mock_query, tmp_path):
+    missing = tmp_path / "missing.jpg"
+    mock_query.return_value = [
+        make_attachment_row(
+            rowid=42, filename=str(missing), transfer_name="missing.jpg"
+        ),
+    ]
+
+    summary, path = _describe_attachment(42)
+
+    assert path is None
+    assert "missing on disk" in summary
+
+
+@patch("mac_messages_mcp.messages.query_messages_db")
+def test_describe_attachment_unknown_id_has_no_path(mock_query):
+    mock_query.return_value = []
+
+    summary, path = _describe_attachment(99999)
+
+    assert path is None
+    assert "not found" in summary.lower()
 
 
 # The compact one-line summary appended to message lines (Tier 1).

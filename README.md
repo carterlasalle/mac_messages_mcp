@@ -452,6 +452,60 @@ print(result)
 
 These calls use the same macOS permissions and can send real messages.
 
+## Command-line interface
+
+The package also installs a `mac-messages-cli` command, so Messages can be read,
+searched, and sent from a terminal without an MCP client. It uses the same local
+databases and needs the same macOS permissions as the server; granting Full Disk
+Access to your terminal covers both.
+
+```bash
+uv tool install mac-messages-mcp
+mac-messages-cli --help
+```
+
+| Command             | Purpose                                                            |
+| ------------------- | ------------------------------------------------------------------ |
+| `recent`            | Recent messages, optionally filtered by contact or group chat ID.   |
+| `search TERM`       | Fuzzy-search message text within a time window.                     |
+| `contact NAME`      | Fuzzy-match a name in Contacts and print send-ready numbers.        |
+| `contacts`          | Contact count plus a sample of AddressBook entries.                 |
+| `chats`             | Named group chats and their identifiers.                            |
+| `attachments`       | Attachment metadata by date range, contact, and MIME type.          |
+| `attachment ID`     | One attachment's metadata and local path, with optional `--save`.   |
+| `send`              | Send one message through Messages.app.                              |
+| `check`             | Diagnose Messages/AddressBook access and iMessage reachability.     |
+
+```bash
+# Last 48 hours, or one contact, or one group chat
+mac-messages-cli recent -n 48
+mac-messages-cli recent --contact "Jordan"
+mac-messages-cli recent --chat chat721054478304420871
+
+# Fuzzy search: last 30 days by default, or all history with -n 0
+mac-messages-cli search "dinner" -t 0.7
+mac-messages-cli search "dinner" -n 0
+
+# Contacts and group chats
+mac-messages-cli contact "Jordan"
+mac-messages-cli chats
+
+# Attachments: search metadata, then fetch or save one file
+mac-messages-cli attachments --since 2026-09-01 --mime image/ --limit 20
+mac-messages-cli attachment 42 --save ~/Desktop/invitation.jpg
+
+# Permissions and iMessage reachability
+mac-messages-cli check --recipient +14155551234
+
+# Sending prompts for confirmation unless --yes is passed
+mac-messages-cli send +14155551234 "Running 10 minutes late."
+```
+
+`mac-messages-cli send` asks for `y/N` confirmation before sending. When stdin is
+not a terminal it refuses to send unless `--yes` is passed, so an unattended
+script cannot send a message by accident. Commands exit non-zero when a lookup
+fails, so the output is safe to branch on in scripts.
+
 ## Development
 
 ```bash
