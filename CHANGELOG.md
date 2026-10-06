@@ -11,6 +11,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `mac-messages-cli`, a terminal interface for the local Messages and Contacts databases: `recent`, `search`, `contact`, `contacts`, `chats`, `attachments`, `attachment`, `send`, and `check`. It reads and writes the same data as the MCP server under the same macOS permissions. `send` prompts for confirmation and refuses to send from a non-terminal stdin unless `--yes` is passed.
 - Attachment metadata can be read without loading inline image bytes (`_describe_attachment`), which the CLI uses to print an attachment's path and optionally copy the file.
 
+- Reads now render per-message context when `chat.db` carries it: the service
+  (`[iMessage]`/`[SMS]`/`[RCS]`), inbound `[unread]`, outbound `[not delivered]`,
+  `[tapback: ...]`, and `[reply]`. Tapback rows, which carry no body of their
+  own, are no longer dropped, and a row from an older schema renders exactly as
+  it did before.
+- `tool_get_recent_messages` gained `limit`, `offset`, `start_date`, `end_date`,
+  `unread_only`, and `since_rowid`, and reports the next `offset` when a page
+  fills up. A `since_rowid` read ignores the `hours` window and returns the
+  oldest message first.
+- `tool_fuzzy_search_messages` gained `contact`, `chat_id`, `start_date`,
+  `end_date`, and `limit`; ranked matches beyond `limit` are reported as clipped.
+- `tool_list_conversations` lists 1:1, business, and group conversations with
+  kind, message count, unread count, and last activity, which named group chats
+  alone could not do.
+- `tool_wait_for_new_messages` blocks until a message newer than a ROWID cursor
+  exists, bounded to 300 seconds per call.
+- `tool_search_attachment_contents` searches inside attachment contents. Text
+  formats work out of the box; PDFs need the optional `pypdf` package and images
+  need `pytesseract` plus the tesseract binary. Rows it cannot extract are
+  reported instead of silently skipped.
+- `tool_send_message` gained `attachment_paths` for iMessage file sends and
+  `confirm=true`, which asks the human through MCP elicitation and sends nothing
+  when the client does not implement elicitation.
+- `tool_create_contact` creates one Contacts.app entry with a phone number.
+- `tool_schedule_message`, `tool_list_scheduled_messages`, and
+  `tool_cancel_scheduled_message` manage an in-memory send queue that exists for
+  the lifetime of the server process.
+- MCP prompts: `triage_unread_messages`, `summarize_recent_messages`, and
+  `draft_reply`.
+
+### Changed
+- Attachment paths are validated and resolved before any part of a message is
+  sent, so a bad path cannot leave a partial send behind.
+- Messages.app automation exposes no API for sending tapbacks, message effects,
+  or subjects; creating or editing a group chat; editing, unsending, deleting,
+  or marking a message read; or saving drafts. The server refuses those requests
+  rather than faking them.
+
 ### Security
 - GitHub Actions workflows now declare read-only `GITHUB_TOKEN` permissions at the workflow level and grant write scopes only on the jobs that upload SARIF, submit SBOMs, comment on PRs, or publish releases.
 - Contact/message text cleaning no longer uses a regex character class spanning U+24C2–U+1F251, which CodeQL flagged as an overly permissive range and which also stripped CJK.

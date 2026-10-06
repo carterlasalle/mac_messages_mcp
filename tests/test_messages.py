@@ -457,7 +457,12 @@ def test_send_message_normalizes_bare_digits_before_dispatch(mock_send):
         result = send_message("19565179045", "hello")
 
     assert result == "sent"
-    mock_send.assert_called_once_with("+19565179045", "hello", group_chat=False)
+    mock_send.assert_called_once_with(
+        "+19565179045",
+        "hello",
+        group_chat=False,
+        attachment_paths=[],
+    )
 
 
 @patch("mac_messages_mcp.messages._send_message_to_recipient")
@@ -727,7 +732,7 @@ def test_get_recent_messages_filters_by_chat_id(mock_query, *_):
 
     sql, params = mock_query.call_args[0]
     assert "chat_message_join" in sql
-    assert params[-1] == 7
+    assert 7 in params
     assert "[Family]" in result
     assert "group hello" in result
 
@@ -1229,6 +1234,7 @@ def test_send_message_resolves_shared_store_selector(mock_send):
         "hello",
         "Anya Example",
         group_chat=False,
+        attachment_paths=[],
     )
 
 
