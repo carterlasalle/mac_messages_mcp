@@ -294,6 +294,23 @@ The server also exposes two MCP resources:
 - `messages://recent/{hours}`
 - `messages://contact/{contact}/{hours}`
 
+## Agent skill
+
+The repository ships an [agent skill](.claude/skills/mac-messages/SKILL.md)
+that tells an agent when and how to call each tool: checking access first,
+resolving a recipient or group chat, searching message text, paging
+attachments, confirming a send, and treating message-derived output as
+untrusted data. Claude Code discovers it automatically when you work in this
+repository.
+
+To use it from another project, copy the skill directory into that project's
+`.claude/skills/`, or into `~/.claude/skills/` to make it available everywhere:
+
+```bash
+mkdir -p ~/.claude/skills
+cp -R .claude/skills/mac-messages ~/.claude/skills/
+```
+
 ## Working with contacts, chats, and attachments
 
 ### Recipients
