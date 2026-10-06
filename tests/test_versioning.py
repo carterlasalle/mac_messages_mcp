@@ -8,7 +8,8 @@ import pytest
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "bump_version.py"
 SPEC = importlib.util.spec_from_file_location("release_version", SCRIPT_PATH)
-assert SPEC and SPEC.loader
+assert SPEC
+assert SPEC.loader
 bump_version = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(bump_version)
 

@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
-"""
-Mac Messages MCP - Entry point fixed for proper MCP protocol implementation
-"""
+"""Mac Messages MCP - Entry point fixed for proper MCP protocol implementation"""
 
-import asyncio
 import logging
 import sys
 from typing import Annotated
@@ -64,7 +61,7 @@ def tool_get_recent_messages(
             description=(
                 "Optional contact filter: contact name, phone number, email address, "
                 'or "contact:N" from a previous contact match list.'
-            )
+            ),
         ),
     ] = None,
     chat_id: Annotated[
@@ -73,12 +70,11 @@ def tool_get_recent_messages(
             description=(
                 "Optional group chat identifier from tool_get_chats, such as "
                 '"chat721054478304420871" or "iMessage;-;chat721054478304420871".'
-            )
+            ),
         ),
     ] = None,
 ) -> str:
-    """
-    Read recent macOS Messages as a plain-text summary.
+    """Read recent macOS Messages as a plain-text summary.
 
     This is read-only: it queries the local Messages database and does not send,
     edit, or delete messages. Requires macOS Full Disk Access for the host app or
@@ -92,7 +88,10 @@ def tool_get_recent_messages(
     IDs.
     """
     logger.info(
-        f"Getting recent messages: hours={hours}, contact={contact}, chat_id={chat_id}"
+        "Getting recent messages: hours=%s, contact=%s, chat_id=%s",
+        hours,
+        contact,
+        chat_id,
     )
     try:
         # Handle contacts that are passed as numbers
@@ -103,8 +102,8 @@ def tool_get_recent_messages(
         result = get_recent_messages(hours=hours, contact=contact, chat_id=chat_id)
         return result
     except Exception as e:
-        logger.error(f"Error in get_recent_messages: {str(e)}")
-        return f"Error getting messages: {str(e)}"
+        logger.error(f"Error in get_recent_messages: {e!s}")
+        return f"Error getting messages: {e!s}"
 
 
 @mcp.tool()
@@ -118,7 +117,7 @@ def tool_send_message(
                 "E.164 phone number with leading '+', bare digits with country "
                 "code, email address, contact name, contact:N selection, or "
                 "Messages chat ID when group_chat is true."
-            )
+            ),
         ),
     ],
     message: Annotated[str, Field(description="Text body to send through Messages.")],
@@ -128,12 +127,11 @@ def tool_send_message(
             description=(
                 "Set true only when recipient is a chat ID from tool_get_chats; "
                 "false sends to an individual buddy/contact."
-            )
+            ),
         ),
     ] = False,
 ) -> str:
-    """
-    Send one outgoing message through the macOS Messages app.
+    """Send one outgoing message through the macOS Messages app.
 
     This has an external side effect: it sends the provided text to the recipient
     using Messages. It may use iMessage or SMS/RCS depending on recipient
@@ -147,17 +145,19 @@ def tool_send_message(
     tool_find_contact first when a name is ambiguous, and
     tool_check_imessage_availability when delivery capability is uncertain.
     """
-    logger.info(f"Sending message to: {recipient}, group_chat: {group_chat}")
+    logger.info("Sending message to: %s, group_chat: %s", recipient, group_chat)
     try:
         # Ensure recipient is a string (handles numbers properly)
         recipient = str(recipient)
         result = send_message(
-            recipient=recipient, message=message, group_chat=group_chat
+            recipient=recipient,
+            message=message,
+            group_chat=group_chat,
         )
         return result
     except Exception as e:
-        logger.error(f"Error in send_message: {str(e)}")
-        return f"Error sending message: {str(e)}"
+        logger.error(f"Error in send_message: {e!s}")
+        return f"Error sending message: {e!s}"
 
 
 @mcp.tool()
@@ -167,12 +167,11 @@ def tool_find_contact(
     name: Annotated[
         str,
         Field(
-            description="Contact name or partial name to fuzzy-match in AddressBook."
+            description="Contact name or partial name to fuzzy-match in AddressBook.",
         ),
     ],
 ) -> str:
-    """
-    Find AddressBook contacts by fuzzy name matching.
+    """Find AddressBook contacts by fuzzy name matching.
 
     This is read-only: it searches local contacts and does not message anyone or
     change contacts. Requires Contacts/AddressBook permission for the host app or
@@ -183,7 +182,7 @@ def tool_find_contact(
     inspect available cached contacts, and tool_fuzzy_search_messages when
     searching message text instead.
     """
-    logger.info(f"Finding contact: {name}")
+    logger.info("Finding contact: %s", name)
     try:
         matches = find_contact_by_name(name)
 
@@ -193,30 +192,28 @@ def tool_find_contact(
         if len(matches) == 1:
             contact = matches[0]
             return f"Found contact: {contact['name']} ({contact['phone']}) with confidence {contact['score']:.2f}"
-        else:
-            # Populate the shared contact:N store so the printed selectors resolve
-            # in tool_send_message and tool_get_recent_messages.
-            set_recent_contact_matches(matches)
-            result = [f"Found {len(matches)} contacts matching '{name}':"]
-            for i, contact in enumerate(matches[:10]):  # Limit to top 10
-                result.append(
-                    f"{i+1}. {contact['name']} ({contact['phone']}) - confidence {contact['score']:.2f}"
-                )
+        # Populate the shared contact:N store so the printed selectors resolve
+        # in tool_send_message and tool_get_recent_messages.
+        set_recent_contact_matches(matches)
+        result = [f"Found {len(matches)} contacts matching '{name}':"]
+        for i, contact in enumerate(matches[:10]):  # Limit to top 10
+            result.append(
+                f"{i + 1}. {contact['name']} ({contact['phone']}) - confidence {contact['score']:.2f}",
+            )
 
-            if len(matches) > 10:
-                result.append(f"...and {len(matches) - 10} more.")
+        if len(matches) > 10:
+            result.append(f"...and {len(matches) - 10} more.")
 
-            return "\n".join(result)
+        return "\n".join(result)
     except Exception as e:
-        logger.error(f"Error in find_contact: {str(e)}")
-        return f"Error finding contact: {str(e)}"
+        logger.error(f"Error in find_contact: {e!s}")
+        return f"Error finding contact: {e!s}"
 
 
 @mcp.tool()
 @bound_untrusted_output
 def tool_check_db_access(ctx: Context) -> str:
-    """
-    Diagnose read access to the local macOS Messages database.
+    """Diagnose read access to the local macOS Messages database.
 
     This is read-only: it checks whether the server can locate and query the
     Messages SQLite database and returns a plain-text diagnostic report with any
@@ -228,15 +225,14 @@ def tool_check_db_access(ctx: Context) -> str:
     try:
         return check_messages_db_access()
     except Exception as e:
-        logger.error(f"Error checking database access: {str(e)}")
-        return f"Error checking database access: {str(e)}"
+        logger.error(f"Error checking database access: {e!s}")
+        return f"Error checking database access: {e!s}"
 
 
 @mcp.tool()
 @bound_untrusted_output
 def tool_check_contacts(ctx: Context) -> str:
-    """
-    List a small sample of contacts available from AddressBook.
+    """List a small sample of contacts available from AddressBook.
 
     This is read-only: it loads cached local contact names and phone numbers and
     returns a count plus sample entries, structurally neutralized and wrapped in
@@ -266,15 +262,14 @@ def tool_check_contacts(ctx: Context) -> str:
 
         return "\n".join(result)
     except Exception as e:
-        logger.error(f"Error checking contacts: {str(e)}")
-        return f"Error checking contacts: {str(e)}"
+        logger.error(f"Error checking contacts: {e!s}")
+        return f"Error checking contacts: {e!s}"
 
 
 @mcp.tool()
 @bound_untrusted_output
 def tool_check_addressbook(ctx: Context) -> str:
-    """
-    Diagnose read access to the local macOS AddressBook database.
+    """Diagnose read access to the local macOS AddressBook database.
 
     This is read-only: it checks whether the server can locate and read local
     Contacts/AddressBook data and returns a plain-text diagnostic report with
@@ -285,15 +280,14 @@ def tool_check_addressbook(ctx: Context) -> str:
     try:
         return check_addressbook_access()
     except Exception as e:
-        logger.error(f"Error checking AddressBook: {str(e)}")
-        return f"Error checking AddressBook: {str(e)}"
+        logger.error(f"Error checking AddressBook: {e!s}")
+        return f"Error checking AddressBook: {e!s}"
 
 
 @mcp.tool()
 @bound_untrusted_output
 def tool_get_chats(ctx: Context) -> str:
-    """
-    List named group chats from the macOS Messages database.
+    """List named group chats from the macOS Messages database.
 
     This is read-only: it queries chat identifiers and display names and does not
     send, edit, or delete messages. Requires Full Disk Access for the host app or
@@ -323,13 +317,13 @@ def tool_get_chats(ctx: Context) -> str:
         formatted_chats = []
         for i, chat in enumerate(chats, 1):
             formatted_chats.append(
-                f"{i}. {chat['display_name']} (ID: {chat['chat_identifier']})"
+                f"{i}. {chat['display_name']} (ID: {chat['chat_identifier']})",
             )
 
         return "Available group chats:\n" + "\n".join(formatted_chats)
     except Exception as e:
-        logger.error(f"Error getting chats: {str(e)}")
-        return f"Error getting chats: {str(e)}"
+        logger.error(f"Error getting chats: {e!s}")
+        return f"Error getting chats: {e!s}"
 
 
 @mcp.tool()
@@ -339,12 +333,11 @@ def tool_check_imessage_availability(
     recipient: Annotated[
         str,
         Field(
-            description="Phone number or email address to check for iMessage capability."
+            description="Phone number or email address to check for iMessage capability.",
         ),
     ],
 ) -> str:
-    """
-    Check whether a recipient appears reachable through iMessage.
+    """Check whether a recipient appears reachable through iMessage.
 
     This is a read-only availability check against local Messages services; it
     does not send a message. Requires Messages to be configured on this Mac.
@@ -352,22 +345,20 @@ def tool_check_imessage_availability(
     fallback for phone numbers. Use this before tool_send_message when delivery
     route matters; use tool_find_contact first if you only have a contact name.
     """
-    logger.info(f"Checking iMessage availability for: {recipient}")
+    logger.info("Checking iMessage availability for: %s", recipient)
     try:
         recipient = str(recipient)
         has_imessage = _check_imessage_availability(recipient)
 
         if has_imessage:
             return f"✅ {recipient} has iMessage available - messages will be sent via iMessage"
-        else:
-            # Check if it looks like a phone number for SMS fallback
-            if any(c.isdigit() for c in recipient):
-                return f"📱 {recipient} does not have iMessage - messages will automatically fall back to SMS/RCS"
-            else:
-                return f"❌ {recipient} does not have iMessage and SMS is not available for email addresses"
+        # Check if it looks like a phone number for SMS fallback
+        if any(c.isdigit() for c in recipient):
+            return f"📱 {recipient} does not have iMessage - messages will automatically fall back to SMS/RCS"
+        return f"❌ {recipient} does not have iMessage and SMS is not available for email addresses"
     except Exception as e:
-        logger.error(f"Error checking iMessage availability: {str(e)}")
-        return f"Error checking iMessage availability: {str(e)}"
+        logger.error(f"Error checking iMessage availability: {e!s}")
+        return f"Error checking iMessage availability: {e!s}"
 
 
 @mcp.tool()
@@ -384,7 +375,7 @@ def tool_fuzzy_search_messages(
             description=(
                 "Number of hours to search backward. Default is 720; use 0 for "
                 "all available messages."
-            )
+            ),
         ),
     ] = 720,
     threshold: Annotated[
@@ -399,8 +390,7 @@ def tool_fuzzy_search_messages(
         ),
     ] = 0.6,
 ) -> str:
-    """
-    Fuzzy-search local message text within a time window.
+    """Fuzzy-search local message text within a time window.
 
     This is read-only: it queries the local Messages database and does not send,
     edit, or delete messages. Requires Full Disk Access for the host app or
@@ -416,16 +406,21 @@ def tool_fuzzy_search_messages(
         return "Error: Hours cannot be negative."
 
     logger.info(
-        f"Tool: Fuzzy searching messages for '{search_term}' in last {hours} hours with threshold {threshold}"
+        "Tool: Fuzzy searching messages for '%s' in last %s hours with threshold %s",
+        search_term,
+        hours,
+        threshold,
     )
     try:
         result = fuzzy_search_messages(
-            search_term=search_term, hours=hours, threshold=threshold
+            search_term=search_term,
+            hours=hours,
+            threshold=threshold,
         )
         return result
     except Exception as e:
-        logger.error(f"Error in tool_fuzzy_search_messages: {e}", exc_info=True)
-        return f"An unexpected error occurred during fuzzy message search: {str(e)}"
+        logger.error("Error in tool_fuzzy_search_messages: %s", e, exc_info=True)
+        return f"An unexpected error occurred during fuzzy message search: {e!s}"
 
 
 @mcp.tool()
@@ -443,24 +438,24 @@ def tool_search_attachments(
     contact: Annotated[
         str | None,
         Field(
-            description="Optional contact name, phone number, or email address filter."
+            description="Optional contact name, phone number, or email address filter.",
         ),
     ] = None,
     mime_type: Annotated[
         str | None,
         Field(
-            description='Optional MIME type or prefix filter, such as "image/" or "application/pdf".'
+            description='Optional MIME type or prefix filter, such as "image/" or "application/pdf".',
         ),
     ] = None,
     limit: Annotated[
         int,
         Field(
-            description="Maximum number of attachment metadata rows to return.", ge=1
+            description="Maximum number of attachment metadata rows to return.",
+            ge=1,
         ),
     ] = 50,
 ) -> str:
-    """
-    Search message attachments by date range, contact, and MIME type.
+    """Search message attachments by date range, contact, and MIME type.
 
     This is read-only and returns metadata only; it does not return file bytes or
     modify attachments. Requires Full Disk Access for the host app or terminal.
@@ -471,8 +466,12 @@ def tool_search_attachments(
     metadata.
     """
     logger.info(
-        f"Searching attachments: start={start_date} end={end_date} "
-        f"contact={contact} mime={mime_type} limit={limit}"
+        "Searching attachments: start=%s end=%s contact=%s mime=%s limit=%s",
+        start_date,
+        end_date,
+        contact,
+        mime_type,
+        limit,
     )
     try:
         if contact is not None:
@@ -485,8 +484,8 @@ def tool_search_attachments(
             limit=limit,
         )
     except Exception as e:
-        logger.error(f"Error in tool_search_attachments: {e}", exc_info=True)
-        return f"Error searching attachments: {str(e)}"
+        logger.error("Error in tool_search_attachments: %s", e, exc_info=True)
+        return f"Error searching attachments: {e!s}"
 
 
 @mcp.tool()
@@ -514,8 +513,7 @@ def tool_get_attachment(
         ),
     ] = 5_000_000,
 ) -> object:
-    """
-    Fetch a specific attachment by its database ROWID.
+    """Fetch a specific attachment by its database ROWID.
 
     This is read-only: it resolves a local Messages attachment file and does not
     modify or delete it. Requires Full Disk Access for the host app or terminal.
@@ -526,12 +524,12 @@ def tool_get_attachment(
     same untrusted block. Use tool_search_attachments first unless you already
     have an attachment ID.
     """
-    logger.info(f"Getting attachment id={attachment_id} max_bytes={max_bytes}")
+    logger.info("Getting attachment id=%s max_bytes=%s", attachment_id, max_bytes)
     try:
         return get_attachment(attachment_id=int(attachment_id), max_bytes=max_bytes)
     except Exception as e:
-        logger.error(f"Error in tool_get_attachment: {e}", exc_info=True)
-        return f"Error getting attachment: {str(e)}"
+        logger.error("Error in tool_get_attachment: %s", e, exc_info=True)
+        return f"Error getting attachment: {e!s}"
 
 
 @mcp.resource("messages://recent/{hours}")
@@ -554,7 +552,7 @@ def run_server() -> None:
         logger.info("Starting Mac Messages MCP server...")
         mcp.run()
     except Exception as e:
-        logger.error(f"Failed to start server: {str(e)}")
+        logger.error(f"Failed to start server: {e!s}")
         sys.exit(1)
 
 

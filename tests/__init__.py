@@ -1,3 +1,1 @@
-"""
-Tests for Mac Messages MCP
-"""
+"""Tests for Mac Messages MCP"""

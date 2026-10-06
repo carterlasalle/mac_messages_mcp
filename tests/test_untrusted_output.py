@@ -1,14 +1,13 @@
-"""
-Regression tests for the Messages/Contacts untrusted-output boundary.
+"""Regression tests for the Messages/Contacts untrusted-output boundary.
 
 Invisible characters are written with ``\\uXXXX`` / ``\\UXXXXXXXX`` escapes
 only. Fixtures use synthetic names, handles, filenames, and MIME types — never
 real phone numbers, message contents, or attachments.
 """
 
-from unittest.mock import MagicMock
-from unittest.mock import mock_open as unittest_mock_open
-from unittest.mock import patch
+import tempfile
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from mcp.server.fastmcp import Image
 
@@ -190,7 +189,7 @@ class TestPresentUntrustedOutput:
     def test_preserves_fastmcp_image_payload(self):
         image = Image(data=b"\x89PNG\r\n", format="png")
         result = present_untrusted_output(
-            ["file\nname.jpg | image/jpeg\ninjected", image]
+            ["file\nname.jpg | image/jpeg\ninjected", image],
         )
         assert isinstance(result, list)
         assert _is_fenced_string(result[0])
@@ -234,10 +233,14 @@ class TestGetRecentMessagesBoundary:
     @patch("mac_messages_mcp.messages.get_contact_name", return_value="Example Sender")
     @patch("mac_messages_mcp.messages.query_messages_db")
     def test_newline_in_group_display_name_does_not_forge_line(
-        self, mock_query, _name, _mapping, _atts
+        self,
+        mock_query,
+        _name,
+        _mapping,
+        _atts,
     ):
         mock_query.return_value = [
-            _message_row(cache_roomnames="room-example", text="example-body")
+            _message_row(cache_roomnames="room-example", text="example-body"),
         ]
         result = get_recent_messages(hours=24)
         _assert_no_forged_structural_line(result)
@@ -255,7 +258,11 @@ class TestGetRecentMessagesBoundary:
     )
     @patch("mac_messages_mcp.messages.query_messages_db")
     def test_newline_in_sender_label_does_not_forge_line(
-        self, mock_query, _name, _mapping, _atts
+        self,
+        mock_query,
+        _name,
+        _mapping,
+        _atts,
     ):
         mock_query.return_value = [_message_row(text="example-body")]
         result = get_recent_messages(hours=24)
@@ -267,7 +274,11 @@ class TestGetRecentMessagesBoundary:
     @patch("mac_messages_mcp.messages.get_contact_name", return_value="Example Sender")
     @patch("mac_messages_mcp.messages.query_messages_db")
     def test_newline_in_attachment_filename_and_mime(
-        self, mock_query, _name, _mapping, mock_atts
+        self,
+        mock_query,
+        _name,
+        _mapping,
+        mock_atts,
     ):
         mock_query.return_value = [_message_row(text="example-body")]
         mock_atts.return_value = {
@@ -276,8 +287,8 @@ class TestGetRecentMessagesBoundary:
                     "id": 7,
                     "mime_type": f"image/jpeg\n{_FORGED_LINE}",
                     "filename": f"invite.jpg\n{_FORGED_LINE}",
-                }
-            ]
+                },
+            ],
         }
         result = get_recent_messages(hours=24)
         _assert_no_forged_structural_line(result)
@@ -290,7 +301,11 @@ class TestGetRecentMessagesBoundary:
     @patch("mac_messages_mcp.messages.get_contact_name", return_value="Example Sender")
     @patch("mac_messages_mcp.messages.query_messages_db")
     def test_zwsp_in_body_stays_escaped_in_tool_output(
-        self, mock_query, _name, _mapping, _atts
+        self,
+        mock_query,
+        _name,
+        _mapping,
+        _atts,
     ):
         mock_query.return_value = [_message_row(text="visible\u200bpayload")]
         result = get_recent_messages(hours=24)
@@ -303,7 +318,11 @@ class TestGetRecentMessagesBoundary:
     @patch("mac_messages_mcp.messages.get_contact_name", return_value="Example Sender")
     @patch("mac_messages_mcp.messages.query_messages_db")
     def test_variation_selectors_and_unicode_tags_in_body(
-        self, mock_query, _name, _mapping, _atts
+        self,
+        mock_query,
+        _name,
+        _mapping,
+        _atts,
     ):
         mock_query.return_value = [_message_row(text="mark\U000e0100tag\U000e0061end")]
         result = get_recent_messages(hours=24)
@@ -318,7 +337,11 @@ class TestGetRecentMessagesBoundary:
     @patch("mac_messages_mcp.messages.get_contact_name", return_value="Example Sender")
     @patch("mac_messages_mcp.messages.query_messages_db")
     def test_body_only_sanitize_is_not_the_boundary(
-        self, mock_query, _name, _mapping, _atts
+        self,
+        mock_query,
+        _name,
+        _mapping,
+        _atts,
     ):
         """If only the body helper ran, unsanitized sender metadata must still fail."""
         mock_query.return_value = [_message_row(text="example-body")]
@@ -341,7 +364,11 @@ class TestGetRecentMessagesBoundary:
     @patch("mac_messages_mcp.messages.get_contact_name", return_value="Example Sender")
     @patch("mac_messages_mcp.messages.query_messages_db")
     def test_attacker_fence_lookalike_body_is_reserialized(
-        self, mock_query, _name, _mapping, _atts
+        self,
+        mock_query,
+        _name,
+        _mapping,
+        _atts,
     ):
         mock_query.return_value = [_message_row(text=_attacker_fenced_lookalike())]
         result = get_recent_messages(hours=24)
@@ -361,7 +388,7 @@ class TestFuzzySearchAndAttachmentsBoundary:
             _message_row(
                 text="example-search-hit",
                 cache_roomnames="room-example",
-            )
+            ),
         ]
         result = fuzzy_search_messages("example-search-hit", hours=24, threshold=0.5)
         _assert_no_forged_structural_line(result)
@@ -389,7 +416,7 @@ class TestFuzzySearchAndAttachmentsBoundary:
                 "message_date": 700_000_000_000_000_000,
                 "is_from_me": 0,
                 "handle_id": 99,
-            }
+            },
         ]
         result = search_attachments()
         _assert_no_forged_structural_line(result)
@@ -398,10 +425,9 @@ class TestFuzzySearchAndAttachmentsBoundary:
         assert "example.bin\\n" in inner
         assert "Example Sender\\n" in inner
 
-    @patch("mac_messages_mcp.messages.os.path.getsize", return_value=200)
     @patch("mac_messages_mcp.messages.os.path.exists", return_value=False)
     @patch("mac_messages_mcp.messages.query_messages_db")
-    def test_get_attachment_path_and_filename(self, mock_query, _exists, _size):
+    def test_get_attachment_path_and_filename(self, mock_query, _exists):
         mock_query.return_value = [
             {
                 "attachment_id": 9,
@@ -417,7 +443,7 @@ class TestFuzzySearchAndAttachmentsBoundary:
                 "message_date": 700_000_000_000_000_000,
                 "is_from_me": 0,
                 "handle_id": 99,
-            }
+            },
         ]
         result = get_attachment(9)
         assert isinstance(result, str)
@@ -427,29 +453,29 @@ class TestFuzzySearchAndAttachmentsBoundary:
         assert "application/pdf\\n" in inner
         assert "\\n" in inner
 
-    @patch("mac_messages_mcp.messages.os.path.getsize", return_value=200)
-    @patch("mac_messages_mcp.messages.os.path.exists", return_value=True)
     @patch("mac_messages_mcp.messages.query_messages_db")
-    def test_get_attachment_keeps_image_bytes(self, mock_query, _exists, _size):
+    def test_get_attachment_keeps_image_bytes(self, mock_query):
         jpeg_bytes = bytes.fromhex("ffd8ffe000104a46494600010100000100010000ffd9")
-        mock_query.return_value = [
-            {
-                "attachment_id": 9,
-                "message_id": 10,
-                "filename": "~/Library/Messages/Attachments/aa/00/photo.jpg",
-                "transfer_name": f"photo.jpg\n{_FORGED_LINE}",
-                "mime_type": "image/jpeg",
-                "uti": "public.jpeg",
-                "total_bytes": 200,
-                "is_sticker": 0,
-                "hide_attachment": 0,
-                "created_date": 700_000_000_000_000_000,
-                "message_date": 700_000_000_000_000_000,
-                "is_from_me": 0,
-                "handle_id": 99,
-            }
-        ]
-        with patch("builtins.open", unittest_mock_open(read_data=jpeg_bytes)):
+        with tempfile.TemporaryDirectory() as tmp:
+            attachment = Path(tmp) / "photo.jpg"
+            attachment.write_bytes(jpeg_bytes)
+            mock_query.return_value = [
+                {
+                    "attachment_id": 9,
+                    "message_id": 10,
+                    "filename": str(attachment),
+                    "transfer_name": f"photo.jpg\n{_FORGED_LINE}",
+                    "mime_type": "image/jpeg",
+                    "uti": "public.jpeg",
+                    "total_bytes": 200,
+                    "is_sticker": 0,
+                    "hide_attachment": 0,
+                    "created_date": 700_000_000_000_000_000,
+                    "message_date": 700_000_000_000_000_000,
+                    "is_from_me": 0,
+                    "handle_id": 99,
+                },
+            ]
             result = get_attachment(9)
         assert isinstance(result, list)
         text = next(x for x in result if isinstance(x, str))
@@ -466,7 +492,7 @@ class TestChatsContactsToolsAndResources:
             {
                 "display_name": f"Example Group\n{_FORGED_LINE}",
                 "chat_identifier": f"chat-example\n{_FORGED_LINE}",
-            }
+            },
         ],
     )
     def test_tool_get_chats_display_name_and_identifier(self, _query):
@@ -483,7 +509,7 @@ class TestChatsContactsToolsAndResources:
                 "name": f"Example Contact\n{_FORGED_LINE}",
                 "phone": "example-handle",
                 "score": 0.95,
-            }
+            },
         ],
     )
     def test_tool_find_contact_name(self, _find):
@@ -497,7 +523,11 @@ class TestChatsContactsToolsAndResources:
     @patch("mac_messages_mcp.messages.get_contact_name", return_value="Example Sender")
     @patch("mac_messages_mcp.messages.query_messages_db")
     def test_recent_resource_uses_same_boundary(
-        self, mock_query, _name, _mapping, _atts
+        self,
+        mock_query,
+        _name,
+        _mapping,
+        _atts,
     ):
         mock_query.return_value = [_message_row(text="resource-body\u200bhidden")]
         result = get_recent_messages_resource(hours=24)

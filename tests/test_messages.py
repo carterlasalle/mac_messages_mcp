@@ -1,8 +1,7 @@
-"""
-Tests for the messages module
-"""
+"""Tests for the messages module"""
 
 import os
+import pathlib
 import sqlite3
 import subprocess
 import tempfile
@@ -31,7 +30,6 @@ from mac_messages_mcp.messages import (
     get_recent_contact_matches,
     get_recent_messages,
     process_contacts,
-    query_messages_db,
     run_applescript,
     send_message,
     set_recent_contact_matches,
@@ -235,7 +233,7 @@ class TestSendMessageToRecipient(unittest.TestCase):
                 "is_sent": 1,
                 "is_delivered": 0,
                 "service": "iMessage",
-            }
+            },
         ]
 
         # Run function — this raised NameError before the fix
@@ -259,7 +257,7 @@ class TestSendMessageToRecipient(unittest.TestCase):
                 "is_sent": 1,
                 "is_delivered": 0,
                 "service": "iMessage",
-            }
+            },
         ]
 
         # Run function with a recipient containing quotes
@@ -272,8 +270,7 @@ class TestSendMessageToRecipient(unittest.TestCase):
 
 
 class TestVerifySendInDbCorrelation(unittest.TestCase):
-    """
-    Regression tests for _verify_send_in_db's correlation key.
+    """Regression tests for _verify_send_in_db's correlation key.
 
     A plain "latest row after timestamp X, for this handle" query can report
     the wrong outcome when two sends to the same handle land close together:
@@ -316,7 +313,9 @@ class TestVerifySendInDbCorrelation(unittest.TestCase):
     @patch("mac_messages_mcp.messages.time")
     @patch("mac_messages_mcp.messages.query_messages_db")
     def test_falls_back_to_latest_row_when_no_body_matches(
-        self, mock_query_db, mock_time
+        self,
+        mock_query_db,
+        mock_time,
     ):
         # e.g. an attachment-only send, or Messages re-encoding the text --
         # don't report a false negative just because the body didn't match.
@@ -330,7 +329,7 @@ class TestVerifySendInDbCorrelation(unittest.TestCase):
                 "service": "iMessage",
                 "text": None,
                 "attributedBody": None,
-            }
+            },
         ]
 
         row = _verify_send_in_db("+15551234567", 0.0, message_text="hello")
@@ -340,7 +339,9 @@ class TestVerifySendInDbCorrelation(unittest.TestCase):
     @patch("mac_messages_mcp.messages.time")
     @patch("mac_messages_mcp.messages.query_messages_db")
     def test_no_message_text_preserves_latest_row_behavior(
-        self, mock_query_db, mock_time
+        self,
+        mock_query_db,
+        mock_time,
     ):
         mock_time.time.side_effect = [0.0, 0.0]
         mock_query_db.return_value = [
@@ -352,7 +353,7 @@ class TestVerifySendInDbCorrelation(unittest.TestCase):
                 "service": "iMessage",
                 "text": "whatever",
                 "attributedBody": None,
-            }
+            },
         ]
 
         row = _verify_send_in_db("+15551234567", 0.0)
@@ -371,7 +372,8 @@ class TestRecipientNormalization(unittest.TestCase):
         with region_pinned("FR"):
             self.assertEqual(_format_phone_for_messages("0639980001"), "+33639980001")
             self.assertEqual(
-                _format_phone_for_messages("05 39 98 00 03"), "+33539980003"
+                _format_phone_for_messages("05 39 98 00 03"),
+                "+33539980003",
             )
 
     def test_phone_formatter_keeps_foreign_e164_intact(self):
@@ -386,7 +388,8 @@ class TestRecipientNormalization(unittest.TestCase):
     def test_phone_formatter_expands_ten_digits_against_configured_region(self):
         with region_pinned("US"):
             self.assertEqual(
-                _format_phone_for_messages("(956) 517-9045"), "+19565179045"
+                _format_phone_for_messages("(956) 517-9045"),
+                "+19565179045",
             )
 
     def test_phone_formatter_rejects_locally_dialable_form(self):
@@ -461,7 +464,7 @@ class TestRecipientNormalization(unittest.TestCase):
                     "last_name": "Example",
                     "nickname": "",
                     "full_name": "Hugo Example",
-                }
+                },
             },
             clear=True,
         ):
@@ -477,8 +480,6 @@ class TestTempFileRace(unittest.TestCase):
     @patch("mac_messages_mcp.messages.run_applescript")
     def test_temp_file_uses_unique_name(self, mock_applescript, mock_query_db):
         """Test that temp file gets a unique name (not hardcoded imessage_tmp.txt)"""
-        import os
-
         mock_applescript.return_value = ""
         mock_query_db.return_value = [
             {
@@ -487,7 +488,7 @@ class TestTempFileRace(unittest.TestCase):
                 "is_sent": 1,
                 "is_delivered": 0,
                 "service": "iMessage",
-            }
+            },
         ]
 
         # Run function
@@ -519,7 +520,7 @@ class TestTempFileRace(unittest.TestCase):
                 "is_sent": 1,
                 "is_delivered": 0,
                 "service": "iMessage",
-            }
+            },
         ]
 
         # Count temp files before
@@ -557,7 +558,7 @@ class TestTempFileRace(unittest.TestCase):
     @patch("mac_messages_mcp.messages.query_messages_db")
     @patch("mac_messages_mcp.messages.run_applescript")
     def test_temp_file_is_owner_only(self, mock_applescript, mock_query_db):
-        """mkstemp must create the message file as 0o600 before AppleScript reads it."""
+        """Mkstemp must create the message file as 0o600 before AppleScript reads it."""
         import re
         import stat
 
@@ -579,14 +580,14 @@ class TestTempFileRace(unittest.TestCase):
                 "is_sent": 1,
                 "is_delivered": 0,
                 "service": "iMessage",
-            }
+            },
         ]
 
         _send_message_to_recipient("+15551234567", "secret body")
 
         self.assertIn("mac-messages-", os.path.basename(seen_mode["path"]))
         self.assertEqual(seen_mode["mode"], 0o600)
-        self.assertFalse(os.path.exists(seen_mode["path"]))
+        self.assertFalse(pathlib.Path(seen_mode["path"]).exists())
 
 
 class TestAddressBookFallback(unittest.TestCase):
@@ -629,7 +630,7 @@ class TestGetChatMapping(unittest.TestCase):
             # Check results
             self.assertEqual(result, {"room1": "Alice", "room2": "Bob"})
         finally:
-            os.unlink(db_path)
+            pathlib.Path(db_path).unlink()
 
     @patch("mac_messages_mcp.messages.get_messages_db_path")
     def test_inaccessible_db_returns_empty_dict(self, mock_path):
@@ -662,7 +663,7 @@ class TestGetChatMapping(unittest.TestCase):
             # Check results
             self.assertEqual(result, {})
         finally:
-            os.unlink(db_path)
+            pathlib.Path(db_path).unlink()
 
 
 class TestGetRecentMessagesChatFilter(unittest.TestCase):
@@ -676,7 +677,7 @@ class TestGetRecentMessagesChatFilter(unittest.TestCase):
                 "display_name": "Family",
                 "chat_identifier": "iMessage;-;chat123",
                 "room_name": "chat123",
-            }
+            },
         ]
 
         result = _find_chat_by_identifier("chat123")
@@ -695,7 +696,12 @@ class TestGetRecentMessagesChatFilter(unittest.TestCase):
     )
     @patch("mac_messages_mcp.messages.query_messages_db")
     def test_get_recent_messages_filters_by_chat_id(
-        self, mock_query, _chat, _name, _mapping, _atts
+        self,
+        mock_query,
+        _chat,
+        _name,
+        _mapping,
+        _atts,
     ):
         mock_query.return_value = [
             {
@@ -706,7 +712,7 @@ class TestGetRecentMessagesChatFilter(unittest.TestCase):
                 "is_from_me": 0,
                 "handle_id": 99,
                 "cache_roomnames": None,
-            }
+            },
         ]
 
         result = get_recent_messages(hours=24, chat_id="chat123")
@@ -730,7 +736,12 @@ class TestGetRecentMessagesChatFilter(unittest.TestCase):
     )
     @patch("mac_messages_mcp.messages.query_messages_db")
     def test_business_chat_gets_no_name_prefix(
-        self, mock_query, _chat, _name, _mapping, _atts
+        self,
+        mock_query,
+        _chat,
+        _name,
+        _mapping,
+        _atts,
     ):
         """1:1/business chats (style 45) must not prefix lines with [Name]."""
         mock_query.return_value = [
@@ -742,7 +753,7 @@ class TestGetRecentMessagesChatFilter(unittest.TestCase):
                 "is_from_me": 0,
                 "handle_id": 99,
                 "cache_roomnames": None,
-            }
+            },
         ]
 
         result = get_recent_messages(hours=24, chat_id="urn:biz:6e67a89b")
@@ -786,7 +797,8 @@ class TestTimestampConversion(unittest.TestCase):
         # Run - convert like the fixed code does
         msg_timestamp_s = apple_nanos / 1_000_000_000
         date_val = datetime.fromtimestamp(
-            msg_timestamp_s + apple_epoch_offset, tz=timezone.utc
+            msg_timestamp_s + apple_epoch_offset,
+            tz=timezone.utc,
         )
 
         # Check results
@@ -804,7 +816,8 @@ class TestTimestampConversion(unittest.TestCase):
         # Run
         msg_timestamp_s = apple_seconds  # already in seconds, no division needed
         date_val = datetime.fromtimestamp(
-            msg_timestamp_s + apple_epoch_offset, tz=timezone.utc
+            msg_timestamp_s + apple_epoch_offset,
+            tz=timezone.utc,
         )
 
         # Check results
@@ -1002,7 +1015,8 @@ class TestFindHandlesByPhone(unittest.TestCase):
 
     @patch("mac_messages_mcp.messages.query_messages_db")
     def test_national_input_finds_same_handle_under_configured_region(
-        self, mock_query_db
+        self,
+        mock_query_db,
     ):
         """A national-format input under region FR searches for the FR E.164 spelling."""
         mock_query_db.return_value = [{"ROWID": 2}]
@@ -1018,7 +1032,8 @@ class TestFindHandlesByPhone(unittest.TestCase):
 
     @patch("mac_messages_mcp.messages.query_messages_db")
     def test_falls_back_to_canonical_scan_when_indexed_lookup_finds_nothing(
-        self, mock_query_db
+        self,
+        mock_query_db,
     ):
         """When the WHERE id IN (...) lookup misses, a full-table canonical scan still matches."""
         mock_query_db.side_effect = [
@@ -1061,7 +1076,7 @@ class TestEmailHandleCaseFolding(unittest.TestCase):
     def test_mixed_case_email_matches_lowercase_handle(self, mock_query_db):
         """A mixed-case address is folded before it reaches the query."""
         mock_query_db.return_value = [
-            {"ROWID": 1, "service": "iMessage", "text_count": 3, "errors": 0}
+            {"ROWID": 1, "service": "iMessage", "text_count": 3, "errors": 0},
         ]
 
         self.assertTrue(_check_imessage_availability("Hugo.Example@Example.COM"))
@@ -1074,7 +1089,7 @@ class TestEmailHandleCaseFolding(unittest.TestCase):
     def test_lowercase_email_still_matches_mixed_case_handle(self, mock_query_db):
         """The comparison is folded in the query, so the stored case does not matter."""
         mock_query_db.return_value = [
-            {"ROWID": 1, "service": "iMessage", "text_count": 3, "errors": 0}
+            {"ROWID": 1, "service": "iMessage", "text_count": 3, "errors": 0},
         ]
 
         self.assertTrue(_check_imessage_availability("hugo.example@example.com"))
@@ -1086,7 +1101,9 @@ class TestEmailHandleCaseFolding(unittest.TestCase):
     @patch("mac_messages_mcp.messages.find_contact_by_name")
     @patch("mac_messages_mcp.messages.query_messages_db")
     def test_address_is_not_routed_through_name_matching(
-        self, mock_query_db, mock_find_by_name
+        self,
+        mock_query_db,
+        mock_find_by_name,
     ):
         """An address reaches the handle lookup instead of fuzzy name matching.
 
@@ -1123,7 +1140,7 @@ class TestAddressBookShortCodeRegression(unittest.TestCase):
                 "nickname": "",
                 "phone": "55501",
                 "email": "",
-            }
+            },
         ]
 
         with region_pinned("FR"):
@@ -1134,7 +1151,9 @@ class TestAddressBookShortCodeRegression(unittest.TestCase):
     @patch("mac_messages_mcp.messages.get_cached_contacts")
     @patch("mac_messages_mcp.messages.query_messages_db")
     def test_get_contact_name_resolves_short_code_handle(
-        self, mock_query_db, mock_contacts
+        self,
+        mock_query_db,
+        mock_contacts,
     ):
         """get_contact_name resolves a handle stored as a short code, through lookup_keys."""
         mock_query_db.return_value = [{"id": "55501"}]
@@ -1183,11 +1202,14 @@ class TestSharedContactMatchStore(unittest.TestCase):
             [
                 {"name": "Ann Example", "phone": "+10000000001", "score": 0.9},
                 {"name": "Anya Example", "phone": "+10000000002", "score": 0.8},
-            ]
+            ],
         )
         send_message("contact:2", "hello")
         mock_send.assert_called_once_with(
-            "+10000000002", "hello", "Anya Example", group_chat=False
+            "+10000000002",
+            "hello",
+            "Anya Example",
+            group_chat=False,
         )
 
 
@@ -1201,7 +1223,7 @@ class TestChatDisplayNameFallback(unittest.TestCase):
                 "ROWID": 2264,
                 "display_name": "Poke",
                 "chat_identifier": "urn:biz:6e67a89b",
-            }
+            },
         ]
         row = _find_chat_by_display_name("poke")
         self.assertEqual(row["ROWID"], 2264)
@@ -1242,7 +1264,11 @@ class TestAttachmentPlaceholderBody(unittest.TestCase):
     @patch("mac_messages_mcp.messages.get_contact_name", return_value="Poke")
     @patch("mac_messages_mcp.messages.query_messages_db")
     def test_recent_renders_attachment_placeholder(
-        self, mock_query, _name, _mapping, _atts
+        self,
+        mock_query,
+        _name,
+        _mapping,
+        _atts,
     ):
         mock_query.return_value = [
             {
@@ -1253,7 +1279,7 @@ class TestAttachmentPlaceholderBody(unittest.TestCase):
                 "is_from_me": 0,
                 "handle_id": 99,
                 "cache_roomnames": None,
-            }
+            },
         ]
         result = get_recent_messages(hours=24)
         self.assertIn("[attachment]", result)

@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Build script for the Mac Messages MCP Claude Desktop extension (.mcpb).
+"""Build script for the Mac Messages MCP Claude Desktop extension (.mcpb).
 
 Vendors a `uv` binary into the bundle so the packaged extension runs on
 machines that don't have `uv` installed, then runs `mcpb pack`.
@@ -41,7 +40,7 @@ _ALLOWED_DOWNLOAD_HOSTS = frozenset(
         "objects.githubusercontent.com",
         "github-releases.githubusercontent.com",
         "release-assets.githubusercontent.com",
-    }
+    },
 )
 _DOWNLOAD_TIMEOUT_SECONDS = 60
 _MAX_DOWNLOAD_REDIRECTS = 8
@@ -99,7 +98,8 @@ def _https_get_allowlisted(url):
         if parsed.query:
             path = f"{path}?{parsed.query}"
         connection = http.client.HTTPSConnection(
-            parsed.hostname, timeout=_DOWNLOAD_TIMEOUT_SECONDS
+            parsed.hostname,
+            timeout=_DOWNLOAD_TIMEOUT_SECONDS,
         )
         try:
             connection.request(
@@ -117,7 +117,7 @@ def _https_get_allowlisted(url):
                 continue
             if response.status != 200:
                 raise ValueError(
-                    f"download failed: HTTP {response.status} for {current}"
+                    f"download failed: HTTP {response.status} for {current}",
                 )
             return response.read()
         finally:
@@ -208,7 +208,7 @@ def main():
             print(f"Error: unknown argument '{arg}'")
             print(
                 "Usage: python scripts/build_mcpb.py [--arch arm64|x86_64] "
-                "[--uv-version X.Y.Z] [--no-bundle]"
+                "[--uv-version X.Y.Z] [--no-bundle]",
             )
             sys.exit(1)
         i += 1

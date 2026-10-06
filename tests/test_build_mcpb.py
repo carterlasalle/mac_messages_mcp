@@ -6,7 +6,8 @@ import pytest
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "build_mcpb.py"
 SPEC = importlib.util.spec_from_file_location("build_mcpb", SCRIPT_PATH)
-assert SPEC and SPEC.loader
+assert SPEC
+assert SPEC.loader
 build_mcpb = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(build_mcpb)
 
@@ -34,7 +35,9 @@ def test_download_allows_pinned_uv_release_url():
     connection = MagicMock()
     connection.getresponse.return_value = _https_response(200, b"uv")
     with patch.object(
-        build_mcpb.http.client, "HTTPSConnection", return_value=connection
+        build_mcpb.http.client,
+        "HTTPSConnection",
+        return_value=connection,
     ) as mock_conn:
         assert build_mcpb._download(url) == b"uv"
         mock_conn.assert_called_once()
@@ -74,10 +77,15 @@ def test_download_refuses_redirect_off_github():
     )
     connection = MagicMock()
     connection.getresponse.return_value = _https_response(
-        302, location="https://evil.example/payload"
+        302,
+        location="https://evil.example/payload",
     )
-    with patch.object(
-        build_mcpb.http.client, "HTTPSConnection", return_value=connection
+    with (
+        patch.object(
+            build_mcpb.http.client,
+            "HTTPSConnection",
+            return_value=connection,
+        ),
+        pytest.raises(ValueError, match="untrusted URL"),
     ):
-        with pytest.raises(ValueError, match="untrusted URL"):
-            build_mcpb._download(url)
+        build_mcpb._download(url)

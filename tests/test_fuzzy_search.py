@@ -1,5 +1,4 @@
-"""
-Tests for fuzzy_search_messages — covers time window, message cap, and search quality.
+"""Tests for fuzzy_search_messages — covers time window, message cap, and search quality.
 
 These tests mock query_messages_db and get_chat_mapping so they run without
 a real Messages database.  They are written RED-first: the time-window,

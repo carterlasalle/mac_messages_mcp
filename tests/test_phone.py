@@ -1,6 +1,4 @@
-"""
-Tests for the phone module
-"""
+"""Tests for the phone module"""
 
 import os
 import unittest
@@ -38,6 +36,7 @@ def region_pinned(region=None, clear_locale_env=False):
             LC_CTYPE and LANG from the environment so region resolution has
             nothing to read except what the test patches directly (e.g.
             _macos_locale).
+
     """
     env_backup = dict(os.environ)
     try:
@@ -302,7 +301,8 @@ class TestRegionFromLocale(unittest.TestCase):
     def test_regional_override_among_other_keywords(self):
         """An rg override sitting beside other locale keywords is still read."""
         self.assertEqual(
-            _region_from_locale("en_US@rg=gbzzzz;calendar=gregorian"), "GB"
+            _region_from_locale("en_US@rg=gbzzzz;calendar=gregorian"),
+            "GB",
         )
 
     def test_unsupported_regional_override_falls_back_to_base_locale(self):

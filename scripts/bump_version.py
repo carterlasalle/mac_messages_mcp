@@ -21,8 +21,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 PROJECT_NAME = "mac-messages-mcp"
 BUMP_KINDS = {"major", "minor", "patch"}
@@ -78,7 +78,7 @@ def _read_project_metadata(path: Path) -> tuple[str, str]:
 
     if project_name != PROJECT_NAME or project_version is None:
         raise VersionError(
-            "pyproject.toml is missing the expected project name/version"
+            "pyproject.toml is missing the expected project name/version",
         )
     return project_name, project_version
 
@@ -148,7 +148,10 @@ def read_versions(root: Path) -> dict[str, str]:
 
 
 def validate_versions(
-    root: Path, *, expected: str | None = None, ignore_lock: bool = False
+    root: Path,
+    *,
+    expected: str | None = None,
+    ignore_lock: bool = False,
 ) -> str:
     """Return the synchronized version or raise VersionError."""
     versions = read_versions(root)
@@ -172,7 +175,10 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     rendered = json.dumps(payload, indent=2) + "\n"
     with tempfile.NamedTemporaryFile(
-        mode="w", encoding="utf-8", dir=path.parent, delete=False
+        mode="w",
+        encoding="utf-8",
+        dir=path.parent,
+        delete=False,
     ) as handle:
         handle.write(rendered)
         temporary = Path(handle.name)
@@ -216,7 +222,7 @@ def set_version(root: Path, target: str, *, dry_run: bool = False) -> str:
         version_args = [target]
     else:
         raise VersionError(
-            "Version target must be major, minor, patch, or a stable X.Y.Z version"
+            "Version target must be major, minor, patch, or a stable X.Y.Z version",
         )
 
     command = ["uv", "version", *version_args, "--no-sync"]
@@ -244,7 +250,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="major, minor, patch, or an explicit stable X.Y.Z version",
     )
     parser.add_argument(
-        "--check", action="store_true", help="validate metadata without changing files"
+        "--check",
+        action="store_true",
+        help="validate metadata without changing files",
     )
     parser.add_argument("--expected", help="require this exact version with --check")
     parser.add_argument(
@@ -268,10 +276,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.check:
             if args.target or args.dry_run:
                 raise VersionError(
-                    "--check cannot be combined with a version target or --dry-run"
+                    "--check cannot be combined with a version target or --dry-run",
                 )
             version = validate_versions(
-                root, expected=args.expected, ignore_lock=args.ignore_lock
+                root,
+                expected=args.expected,
+                ignore_lock=args.ignore_lock,
             )
             print(version)
             return 0
@@ -290,7 +300,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     except subprocess.CalledProcessError as exc:
         print(
-            f"Error: uv version failed with exit code {exc.returncode}", file=sys.stderr
+            f"Error: uv version failed with exit code {exc.returncode}",
+            file=sys.stderr,
         )
         return exc.returncode or 1
 

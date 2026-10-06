@@ -1,5 +1,4 @@
-"""
-Tests for Apple-epoch timestamp conversion.
+"""Tests for Apple-epoch timestamp conversion.
 
 These tests pin behaviour around the project's Apple-ns <-> datetime
 conversion: the SQL params produced for time-windowed queries, the
@@ -15,7 +14,7 @@ written correctly by inspection.
 import calendar
 import unittest
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from mac_messages_mcp.messages import (
     _APPLE_EPOCH,
@@ -109,7 +108,7 @@ class TestGetRecentMessagesDateFormatting(unittest.TestCase):
                 "is_from_me": 0,
                 "handle_id": 1,
                 "cache_roomnames": None,
-            }
+            },
         ]
         result = get_recent_messages(hours=24)
         # The exact local time depends on the machine's tz, but the UTC
@@ -131,7 +130,7 @@ class TestGetRecentMessagesDateFormatting(unittest.TestCase):
                 "is_from_me": 0,
                 "handle_id": 1,
                 "cache_roomnames": None,
-            }
+            },
         ]
         result = get_recent_messages(hours=24)
         self.assertIn("2024-01-1", result)
@@ -148,7 +147,8 @@ class TestFuzzySearchTimestampParam(unittest.TestCase):
     @patch("mac_messages_mcp.messages.query_messages_db")
     def test_window_param_is_apple_ns_within_tolerance(self, mock_query, *_):
         """The first param (the time-window cutoff) should be an
-        Apple-ns string that decodes to roughly (now - hours)."""
+        Apple-ns string that decodes to roughly (now - hours).
+        """
         mock_query.return_value = []
         before = datetime.now(timezone.utc)
         fuzzy_search_messages(search_term="x", hours=24, threshold=0.5)
@@ -166,10 +166,14 @@ class TestFuzzySearchTimestampParam(unittest.TestCase):
         # Allow up to 1 second of slop for the now() drift between
         # before/after measurements.
         self.assertGreaterEqual(
-            cutoff_ns, expected_low - 10**9, f"cutoff {cutoff_ns} too small"
+            cutoff_ns,
+            expected_low - 10**9,
+            f"cutoff {cutoff_ns} too small",
         )
         self.assertLessEqual(
-            cutoff_ns, expected_high + 10**9, f"cutoff {cutoff_ns} too large"
+            cutoff_ns,
+            expected_high + 10**9,
+            f"cutoff {cutoff_ns} too large",
         )
 
     @patch("mac_messages_mcp.messages._attachments_for_message_ids", return_value={})

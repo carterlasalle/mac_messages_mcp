@@ -17,7 +17,6 @@ import os
 import re
 import subprocess
 from functools import lru_cache
-from typing import List, Optional
 
 import phonenumbers
 
@@ -43,9 +42,8 @@ _LOCALE_REGION_RE = re.compile(r"[-_]([A-Za-z]{2})(?:[-_@.]|$)")
 _LOCALE_RG_REGION_RE = re.compile(r"[@;]rg=([A-Za-z]{2})[A-Za-z0-9]*(?:;|$)")
 
 
-def _region_from_locale(locale_id: Optional[str]) -> Optional[str]:
-    """
-    Extract an ISO 3166-1 alpha-2 region code from a locale identifier.
+def _region_from_locale(locale_id: str | None) -> str | None:
+    """Extract an ISO 3166-1 alpha-2 region code from a locale identifier.
 
     Parameters
     ----------
@@ -65,6 +63,7 @@ def _region_from_locale(locale_id: Optional[str]) -> Optional[str]:
     configured separately from Language, and it beats the region embedded in
     the base locale. An override naming a region phonenumbers has no metadata
     for is ignored rather than fatal, so the base locale still gets its turn.
+
     """
     if not locale_id:
         return None
@@ -87,9 +86,8 @@ def _region_from_locale(locale_id: Optional[str]) -> Optional[str]:
     return region if region in phonenumbers.SUPPORTED_REGIONS else None
 
 
-def _macos_locale() -> Optional[str]:
-    """
-    Read the region-bearing locale macOS is configured with.
+def _macos_locale() -> str | None:
+    """Read the region-bearing locale macOS is configured with.
 
     Returns
     -------
@@ -100,6 +98,7 @@ def _macos_locale() -> Optional[str]:
         is readable even when the process was started without any ``LANG``
         environment variable, which is the usual case for an MCP server
         launched by a GUI client.
+
     """
     try:
         result = subprocess.run(
@@ -118,8 +117,7 @@ def _macos_locale() -> Optional[str]:
 
 @lru_cache(maxsize=1)
 def get_default_region() -> str:
-    """
-    Determine the region national-format phone numbers should be parsed against.
+    """Determine the region national-format phone numbers should be parsed against.
 
     The first source that yields a region phonenumbers supports wins:
 
@@ -138,6 +136,7 @@ def get_default_region() -> str:
     The result is cached for the lifetime of the process. Call
     ``get_default_region.cache_clear()`` after changing the environment, which
     is what the tests do.
+
     """
     override = os.environ.get(REGION_ENV_VAR, "").strip().upper()
     if override in phonenumbers.SUPPORTED_REGIONS:
@@ -156,8 +155,7 @@ def get_default_region() -> str:
 
 
 def is_email_handle(value: str) -> bool:
-    """
-    Report whether a handle id is an email address rather than a phone number.
+    """Report whether a handle id is an email address rather than a phone number.
 
     Parameters
     ----------
@@ -168,14 +166,14 @@ def is_email_handle(value: str) -> bool:
     -------
     bool
         ``True`` when the value should be compared as an email address.
+
     """
     return "@" in (value or "")
 
 
 @lru_cache(maxsize=4096)
-def _parse(value: str, region: str) -> Optional[phonenumbers.PhoneNumber]:
-    """
-    Parse `value` against `region`, or return None when it is not a number.
+def _parse(value: str, region: str) -> phonenumbers.PhoneNumber | None:
+    """Parse `value` against `region`, or return None when it is not a number.
 
     Parameters
     ----------
@@ -191,6 +189,7 @@ def _parse(value: str, region: str) -> Optional[phonenumbers.PhoneNumber]:
     phonenumbers.PhoneNumber or None
         The parsed number. Possibility is not checked here; callers decide
         how strict they need to be.
+
     """
     try:
         return phonenumbers.parse(value, region)
@@ -198,9 +197,8 @@ def _parse(value: str, region: str) -> Optional[phonenumbers.PhoneNumber]:
         return None
 
 
-def to_e164(value: str, region: Optional[str] = None) -> Optional[str]:
-    """
-    Convert a phone number written in any format to its E.164 representation.
+def to_e164(value: str, region: str | None = None) -> str | None:
+    """Convert a phone number written in any format to its E.164 representation.
 
     Parameters
     ----------
@@ -229,6 +227,7 @@ def to_e164(value: str, region: Optional[str] = None) -> Optional[str]:
     normalize the same numbers over and over.
 
     See :func:`to_dialable_e164` for the stricter form the send path needs.
+
     """
     if not value or is_email_handle(value):
         return None
@@ -240,9 +239,8 @@ def to_e164(value: str, region: Optional[str] = None) -> Optional[str]:
     return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
 
 
-def to_dialable_e164(value: str, region: Optional[str] = None) -> Optional[str]:
-    """
-    Convert a phone number to E.164, refusing forms that are only locally dialable.
+def to_dialable_e164(value: str, region: str | None = None) -> str | None:
+    """Convert a phone number to E.164, refusing forms that are only locally dialable.
 
     Parameters
     ----------
@@ -271,6 +269,7 @@ def to_dialable_e164(value: str, region: Optional[str] = None) -> Optional[str]:
     eight-digit Norwegian number or a nine-digit French one is ``IS_POSSIBLE``
     and passes. A length floor cannot tell those apart, and rejected every
     country whose numbers are shorter than the North American ten.
+
     """
     if not value or is_email_handle(value):
         return None
@@ -288,9 +287,8 @@ def to_dialable_e164(value: str, region: Optional[str] = None) -> Optional[str]:
     return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
 
 
-def canonical_handle(value: str, region: Optional[str] = None) -> Optional[str]:
-    """
-    Reduce a recipient or handle id to the form used for every comparison.
+def canonical_handle(value: str, region: str | None = None) -> str | None:
+    """Reduce a recipient or handle id to the form used for every comparison.
 
     Parameters
     ----------
@@ -311,6 +309,7 @@ def canonical_handle(value: str, region: Optional[str] = None) -> Optional[str]:
     --------
     With the region set to ``FR``, ``"06 39 98 00 01"``, ``"0639980001"`` and
     ``"+33 6 39 98 00 01"`` all reduce to ``"+33639980001"``.
+
     """
     if not value:
         return None
@@ -322,8 +321,7 @@ def canonical_handle(value: str, region: Optional[str] = None) -> Optional[str]:
 
 
 def digits_only(value: str) -> str:
-    """
-    Strip everything but the digits from a phone number.
+    """Strip everything but the digits from a phone number.
 
     Parameters
     ----------
@@ -335,6 +333,7 @@ def digits_only(value: str) -> str:
     str
         The digits, in order. Used as a last-resort comparison key for inputs
         no region can make sense of.
+
     """
     if not value:
         return ""
@@ -342,8 +341,7 @@ def digits_only(value: str) -> str:
 
 
 def contact_key(value: str) -> str:
-    """
-    Return the key an address book entry is stored under in the contacts map.
+    """Return the key an address book entry is stored under in the contacts map.
 
     Parameters
     ----------
@@ -367,6 +365,7 @@ def contact_key(value: str) -> str:
     which is what the whole map used before canonical keys existed.
     Retrying the parse on the digits alone first recovers the entries whose
     only problem was a label the parser choked on.
+
     """
     if not value:
         return ""
@@ -382,9 +381,8 @@ def contact_key(value: str) -> str:
     return canonical_handle(digits) or digits
 
 
-def lookup_keys(value: str) -> List[str]:
-    """
-    Return the contacts map keys a handle id may have been stored under.
+def lookup_keys(value: str) -> list[str]:
+    """Return the contacts map keys a handle id may have been stored under.
 
     Parameters
     ----------
@@ -405,10 +403,11 @@ def lookup_keys(value: str) -> List[str]:
     bare digits alongside its canonical form is what lets the two sides meet.
     The national number comes from the parsed number, not from stripping a
     guessed country code.
-    """
-    keys: List[str] = []
 
-    def add(candidate: Optional[str]) -> None:
+    """
+    keys: list[str] = []
+
+    def add(candidate: str | None) -> None:
         if candidate and candidate not in keys:
             keys.append(candidate)
 
@@ -427,9 +426,8 @@ def lookup_keys(value: str) -> List[str]:
     return keys
 
 
-def handle_variants(value: str, region: Optional[str] = None) -> List[str]:
-    """
-    Build the handle ids the Messages database may have recorded for a recipient.
+def handle_variants(value: str, region: str | None = None) -> list[str]:
+    """Build the handle ids the Messages database may have recorded for a recipient.
 
     Parameters
     ----------
@@ -452,10 +450,11 @@ def handle_variants(value: str, region: Optional[str] = None) -> List[str]:
     Used to build ``WHERE id IN (...)`` clauses. It is a fast path only:
     matching still falls back to comparing :func:`canonical_handle` values,
     which catches spellings this list does not anticipate.
-    """
-    variants: List[str] = []
 
-    def add(candidate: Optional[str]) -> None:
+    """
+    variants: list[str] = []
+
+    def add(candidate: str | None) -> None:
         if candidate and candidate not in variants:
             variants.append(candidate)
 
@@ -476,7 +475,8 @@ def handle_variants(value: str, region: Optional[str] = None) -> List[str]:
             # Some handles are stored the way the number is dialled locally,
             # e.g. "0639980001" in France or "(555) 555-0142" in the US.
             national = phonenumbers.format_number(
-                parsed, phonenumbers.PhoneNumberFormat.NATIONAL
+                parsed,
+                phonenumbers.PhoneNumberFormat.NATIONAL,
             )
             add(digits_only(national))
 

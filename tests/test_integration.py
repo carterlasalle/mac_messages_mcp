@@ -1,5 +1,4 @@
-"""
-Integration tests for Mac Messages MCP server
+"""Integration tests for Mac Messages MCP server
 Tests all MCP tools to ensure they don't crash and handle edge cases properly
 """
 
@@ -14,7 +13,6 @@ from mac_messages_mcp.messages import (
     check_addressbook_access,
     check_messages_db_access,
     extract_body_from_attributed,
-    find_contact_by_name,
     fuzzy_search_messages,
     get_recent_messages,
 )
@@ -152,7 +150,8 @@ def test_sms_fallback_functionality():
     try:
         result = _check_imessage_availability("+15551234567")
         assert isinstance(
-            result, bool
+            result,
+            bool,
         ), "iMessage availability check should return boolean"
         print("✅ iMessage availability check works")
     except Exception as e:
@@ -161,7 +160,7 @@ def test_sms_fallback_functionality():
             print(f"❌ Import error in iMessage check: {e}")
             raise AssertionError("Import error in iMessage availability check") from e
         print(
-            f"✅ iMessage availability check handles exceptions properly: {type(e).__name__}"
+            f"✅ iMessage availability check handles exceptions properly: {type(e).__name__}",
         )
 
     # Test SMS sending function
@@ -175,7 +174,7 @@ def test_sms_fallback_functionality():
             print(f"❌ Import error in SMS send: {e}")
             raise AssertionError("Import error in SMS send") from e
         print(
-            f"✅ SMS sending function handles exceptions properly: {type(e).__name__}"
+            f"✅ SMS sending function handles exceptions properly: {type(e).__name__}",
         )
 
 
@@ -269,9 +268,8 @@ def run_all_tests():
     if failed == 0:
         print("🎉 ALL TESTS PASSED! The fixes are working correctly.")
         return True
-    else:
-        print("💥 SOME TESTS FAILED! There are still issues to fix.")
-        return False
+    print("💥 SOME TESTS FAILED! There are still issues to fix.")
+    return False
 
 
 if __name__ == "__main__":

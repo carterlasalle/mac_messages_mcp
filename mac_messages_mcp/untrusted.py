@@ -1,5 +1,4 @@
-"""
-MCP output boundary for Messages/Contacts-derived text.
+"""MCP output boundary for Messages/Contacts-derived text.
 
 Third-party iMessage/SMS/Contacts content is treated as untrusted at a single
 serialization + fencing layer. Callers must pass *every* model-facing payload
@@ -16,7 +15,8 @@ from __future__ import annotations
 import functools
 import re
 import unicodedata
-from typing import Any, Callable, TypeVar
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 from mcp.server.fastmcp import Image
 
