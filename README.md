@@ -20,16 +20,28 @@ Messages.app automation only when the client explicitly calls the send tool.
 ## What it can do
 
 - Read recent messages across all conversations or filter by contact or group
-  chat
+  chat, page back through history, and restrict reads to a date range or to
+  unread messages
+- List every conversation (1:1, business, and group) with message and unread
+  counts, and wait for new messages to arrive
+- See per-message context: the service it used (iMessage/SMS/RCS), whether an
+  inbound message is unread, whether an outbound one was delivered, plus
+  tapbacks and threaded replies
 - Fuzzy-search message text across a time window, including all available
-  history
+  history, scoped to one contact or conversation
 - Find Contacts by approximate name and return send-ready phone numbers
 - List named group chats and use their chat IDs for reads or sends
-- Send iMessage, with SMS/RCS fallback for eligible phone recipients
+- Send iMessage, with SMS/RCS fallback for eligible phone recipients, and send
+  local files as iMessage attachments
+- Optionally require the human to approve a send through MCP elicitation before
+  anything leaves the machine
+- Schedule a message for later delivery while the server stays running
 - Check whether a recipient appears reachable through iMessage before sending
-- Find attachments by date, sender, and MIME type
+- Find attachments by date, sender, and MIME type, and search inside text and
+  PDF attachments (OCR for images with the optional OCR extra)
 - Return small images inline, convert HEIC images to PNG, or return a local path
   for larger and non-image files
+- Create a Contacts entry from the client
 - Diagnose Messages and Contacts database permissions from inside the MCP client
 
 ## Quick start
@@ -273,26 +285,69 @@ this.
 
 <!-- markdownlint-disable MD013 -->
 
-| Tool                               | Purpose                                                                                                | Side effect              |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------ | ------------------------ |
-| `tool_get_recent_messages`         | Read recent messages, optionally filtered by contact or group chat ID                                  | Read-only                |
-| `tool_fuzzy_search_messages`       | Search message bodies by approximate text match; defaults to 30 days, or use `hours=0` for all history | Read-only                |
-| `tool_find_contact`                | Fuzzy-match a name in Contacts and return phone numbers                                                | Read-only                |
-| `tool_get_chats`                   | List named group chats and their identifiers                                                           | Read-only                |
-| `tool_search_attachments`          | Find attachment metadata by date, contact, MIME type, and limit                                        | Read-only                |
-| `tool_get_attachment`              | Fetch one attachment by ID, inline when supported or as a local path                                   | Read-only                |
-| `tool_check_imessage_availability` | Check likely iMessage availability for a phone number or email                                         | Read-only                |
-| `tool_check_db_access`             | Diagnose access to `~/Library/Messages/chat.db`                                                        | Read-only                |
-| `tool_check_contacts`              | Return a contact count and a small sample                                                              | Read-only                |
-| `tool_check_addressbook`           | Diagnose Contacts/AddressBook database access                                                          | Read-only                |
-| `tool_send_message`                | Send one direct or group message through Messages.app                                                  | **Sends a real message** |
+| Tool                               | Purpose                                                                                                             | Side effect                     |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| `tool_get_recent_messages`         | Read recent messages, filtered by contact, group chat ID, date range, or unread state; page with `limit`/`offset`    | Read-only                       |
+| `tool_fuzzy_search_messages`       | Search message bodies by approximate text match, scoped to a contact or chat; defaults to 30 days, or `hours=0`     | Read-only                       |
+| `tool_list_conversations`          | List every conversation with kind, message count, unread count, and last activity                                   | Read-only                       |
+| `tool_wait_for_new_messages`       | Block until a message newer than a ROWID cursor arrives, or the timeout expires                                     | Read-only                       |
+| `tool_find_contact`                | Fuzzy-match a name in Contacts and return phone numbers                                                             | Read-only                       |
+| `tool_get_chats`                   | List named group chats and their identifiers                                                                        | Read-only                       |
+| `tool_search_attachments`          | Find attachment metadata by date, contact, MIME type, and limit                                                     | Read-only                       |
+| `tool_search_attachment_contents`  | Search inside attachment text/PDF contents by date, contact, and MIME type                                          | Read-only                       |
+| `tool_get_attachment`              | Fetch one attachment by ID, inline when supported or as a local path                                                | Read-only                       |
+| `tool_check_imessage_availability` | Check likely iMessage availability for a phone number or email                                                      | Read-only                       |
+| `tool_check_db_access`             | Diagnose access to `~/Library/Messages/chat.db`                                                                     | Read-only                       |
+| `tool_check_contacts`              | Return a contact count and a small sample                                                                           | Read-only                       |
+| `tool_check_addressbook`           | Diagnose Contacts/AddressBook database access                                                                       | Read-only                       |
+| `tool_send_message`                | Send one direct or group message through Messages.app, optionally with file attachments and elicitation approval    | **Sends a real message**        |
+| `tool_create_contact`              | Create one Contacts.app entry with a phone number                                                                   | **Changes Contacts**            |
+| `tool_schedule_message`            | Queue a message for later delivery while this server process runs                                                   | **Sends a real message later**  |
+| `tool_list_scheduled_messages`     | List the in-process scheduled-message queue and its status                                                          | Read-only                       |
+| `tool_cancel_scheduled_message`    | Cancel one pending scheduled message                                                                                | Read-only                       |
 
 <!-- markdownlint-enable MD013 -->
+
+Three MCP prompts ship with the server: `triage_unread_messages`,
+`summarize_recent_messages`, and `draft_reply`. They are starting points that
+tell the agent which read tools to call, and they never send anything.
 
 The server also exposes two MCP resources:
 
 - `messages://recent/{hours}`
 - `messages://contact/{contact}/{hours}`
+
+### Message metadata, paging, and cursors
+
+Reads append compact tags when the message row carries the data, so output stays
+unchanged for old or partial databases:
+
+```text
+[2026-10-01 09:14:02] Alice [iMessage] [unread]: running late, sorry
+[2026-10-01 09:15:40] You [iMessage] [not delivered]: no worries
+[2026-10-01 09:15:55] Alice [iMessage] [tapback: liked]: (reaction)
+[2026-10-01 09:16:10] Bob [SMS] [reply]: got it
+```
+
+`tool_get_recent_messages` closes with a note when a page fills up, naming the
+next `offset` to use. Passing `since_rowid` switches it to a forward cursor read
+(oldest first) that ignores the `hours` window, which is the pattern
+`tool_wait_for_new_messages` polls on.
+
+### What it deliberately does not do
+
+Messages.app automation does not expose these, so the server refuses rather than
+pretending:
+
+- sending tapbacks, message effects, or a subject line (only text and file
+  attachments can be sent)
+- creating a group chat, adding or removing participants, or attaching files to
+  a group chat
+- editing, unsending, deleting, or marking a message read, and saving drafts
+- editing or merging an existing Contacts card (`tool_create_contact` creates a
+  new one)
+- scheduled sends rely on the server process staying alive; nothing is
+  persisted, so a scheduled message is lost if the client disconnects first
 
 ## Working with contacts, chats, and attachments
 
