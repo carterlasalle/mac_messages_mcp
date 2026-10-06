@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Added `mac-messages-cli`, a terminal interface for the local Messages and Contacts databases: `recent`, `search`, `contact`, `contacts`, `chats`, `attachments`, `attachment`, `send`, and `check`. It reads and writes the same data as the MCP server under the same macOS permissions. `send` prompts for confirmation and refuses to send from a non-terminal stdin unless `--yes` is passed.
+- Attachment metadata can be read without loading inline image bytes (`_describe_attachment`), which the CLI uses to print an attachment's path and optionally copy the file.
+
 ### Security
 - GitHub Actions workflows now declare read-only `GITHUB_TOKEN` permissions at the workflow level and grant write scopes only on the jobs that upload SARIF, submit SBOMs, comment on PRs, or publish releases.
 - Contact/message text cleaning no longer uses a regex character class spanning U+24C2–U+1F251, which CodeQL flagged as an overly permissive range and which also stripped CJK.

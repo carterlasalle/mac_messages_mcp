@@ -53,6 +53,7 @@ dev = [
 [project.scripts]
 mac-messages-mcp = "mac_messages_mcp.server:run_server"
 mac_messages_mcp = "mac_messages_mcp.server:run_server"
+mac-messages-cli = "mac_messages_mcp.cli:main"
 
 [tool.setuptools]
 packages = ["mac_messages_mcp"]
