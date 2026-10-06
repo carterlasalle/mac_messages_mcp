@@ -1,0 +1,18 @@
+include CHANGELOG.md
+include CONTRIBUTING.md
+include LICENSE
+include README.md
+include SECURITY.md
+include VERSIONING.md
+include Dockerfile
+include glama.json
+include main.py
+include manifest.json
+include uv.lock
+include .bandit
+include .dockerignore
+include .mcpbignore
+recursive-include fuzz *.py
+recursive-include memory-bank *.md
+recursive-include scripts *.py
+recursive-include tests *.py
