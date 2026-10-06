@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Added `mac-messages-cli`, a terminal interface for the local Messages and Contacts databases: `recent`, `search`, `contact`, `contacts`, `chats`, `attachments`, `attachment`, `send`, and `check`. It reads and writes the same data as the MCP server under the same macOS permissions. `send` prompts for confirmation and refuses to send from a non-terminal stdin unless `--yes` is passed.
+- Attachment metadata can be read without loading inline image bytes (`_describe_attachment`), which the CLI uses to print an attachment's path and optionally copy the file.
+
 - Reads now render per-message context when `chat.db` carries it: the service
   (`[iMessage]`/`[SMS]`/`[RCS]`), inbound `[unread]`, outbound `[not delivered]`,
   `[tapback: ...]`, and `[reply]`. Tapback rows, which carry no body of their
