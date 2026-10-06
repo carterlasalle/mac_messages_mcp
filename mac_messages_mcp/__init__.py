@@ -1,7 +1,7 @@
-"""Mac Messages MCP - A bridge for interacting with macOS Messages app"""
+# Copyright (c) 2023 Carter Lasalle
+"""Mac Messages MCP - A bridge for interacting with macOS Messages app."""
 
-from importlib.metadata import PackageNotFoundError, version
-
+from ._version import __version__
 from .messages import (
     check_addressbook_access,
     check_messages_db_access,
@@ -20,6 +20,7 @@ from .messages import (
 )
 
 __all__ = [
+    "__version__",
     "check_addressbook_access",
     "check_messages_db_access",
     "find_contact_by_name",
@@ -35,8 +36,3 @@ __all__ = [
     "query_messages_db",
     "send_message",
 ]
-
-try:
-    __version__ = version("mac-messages-mcp")
-except PackageNotFoundError:
-    __version__ = "0.0.0+local"

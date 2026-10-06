@@ -1,3 +1,4 @@
+# Copyright (c) 2023 Carter Lasalle
 import importlib.util
 import json
 import subprocess
@@ -50,10 +51,11 @@ def test_validate_versions_reports_mismatch(tmp_path: Path) -> None:
 def test_set_version_delegates_to_uv_and_syncs_manifest(tmp_path: Path) -> None:
     write_project(tmp_path)
 
-    def fake_uv(command, *, cwd, check):
+    def fake_uv(command, *, cwd, check, shell):
         assert command == ["uv", "version", "--bump", "major", "--no-sync"]
         assert cwd == tmp_path
         assert check is True
+        assert shell is False
         write_project(tmp_path, "1.0.0")
         # Simulate uv updating only pyproject + lock; the script owns manifest sync.
         manifest = {"name": "mac-messages-mcp", "version": "0.9.2"}
@@ -76,7 +78,8 @@ def test_set_version_rolls_back_all_files_on_failure(tmp_path: Path) -> None:
         name: (tmp_path / name).read_bytes() for name in bump_version.VERSION_FILES
     }
 
-    def failing_uv(command, *, cwd, check):
+    def failing_uv(command, *, cwd, check, shell):
+        assert shell is False
         (tmp_path / "pyproject.toml").write_text("broken")
         raise subprocess.CalledProcessError(1, command)
 
@@ -100,5 +103,5 @@ def test_main_requires_explicit_action(tmp_path: Path, capsys) -> None:
 
 def test_explicit_version_must_be_stable_semver(tmp_path: Path) -> None:
     write_project(tmp_path)
-    with pytest.raises(bump_version.VersionError, match="stable X.Y.Z"):
+    with pytest.raises(bump_version.VersionError, match=r"stable X\.Y\.Z"):
         bump_version.set_version(tmp_path, "1.0.0rc1")

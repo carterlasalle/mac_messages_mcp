@@ -1,3 +1,4 @@
+# Copyright (c) 2023 Carter Lasalle
 """Canonical phone number handling for the Messages database.
 
 Handle ids in ``chat.db`` are stored in whatever shape the sender, the carrier
@@ -27,6 +28,8 @@ REGION_ENV_VAR = "MAC_MESSAGES_REGION"
 # Used only when neither the environment nor macOS can tell us anything. It
 # matches the historical behaviour of this package.
 FALLBACK_REGION = "US"
+# Bound for the macOS `defaults` locale lookup below.
+_SUBPROCESS_TIMEOUT_S = 5
 
 # Pulls the ISO 3166-1 alpha-2 region out of a locale identifier: "fr_FR",
 # "fr-FR", "en_US.UTF-8", "fr_FR@euro" or "zh-Hans-CN" all yield the trailing
@@ -102,10 +105,11 @@ def _macos_locale() -> str | None:
     """
     try:
         result = subprocess.run(
-            ["defaults", "read", "-g", "AppleLocale"],
+            ["/usr/bin/defaults", "read", "-g", "AppleLocale"],
             capture_output=True,
             text=True,
-            timeout=5,
+            check=False,
+            timeout=_SUBPROCESS_TIMEOUT_S,
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -168,7 +172,7 @@ def is_email_handle(value: str) -> bool:
         ``True`` when the value should be compared as an email address.
 
     """
-    return "@" in (value or "")
+    return "@" in value
 
 
 @lru_cache(maxsize=4096)
@@ -460,7 +464,7 @@ def handle_variants(value: str, region: str | None = None) -> list[str]:
 
     if is_email_handle(value):
         add(canonical_handle(value, region))
-        add((value or "").strip())
+        add(value.strip())
         return variants
 
     e164 = to_e164(value, region)
@@ -484,6 +488,6 @@ def handle_variants(value: str, region: str | None = None) -> list[str]:
     # ("SHORTCODE", a brand name) are handles too, and some carry padding that
     # is part of the stored id.
     add(value)
-    add((value or "").strip())
+    add(value.strip())
     add(digits_only(value))
     return [v for v in variants if v]

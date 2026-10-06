@@ -1,4 +1,5 @@
-"""Tests for fuzzy_search_messages — covers time window, message cap, and search quality.
+# Copyright (c) 2023 Carter Lasalle
+"""Tests for fuzzy_search_messages — time window, message cap, search quality.
 
 These tests mock query_messages_db and get_chat_mapping so they run without
 a real Messages database.  They are written RED-first: the time-window,
@@ -19,6 +20,7 @@ import inspect
 import itertools
 import re
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 from mac_messages_mcp.messages import _escape_like, fuzzy_search_messages
@@ -29,15 +31,17 @@ from mac_messages_mcp.messages import _escape_like, fuzzy_search_messages
 
 _APPLE_EPOCH = datetime(2001, 1, 1, tzinfo=timezone.utc)
 _ROWID_COUNTER = itertools.count(1)
+_HOURS_IN_30_DAYS = 30 * 24
 
 
 def _make_message(
     text: str,
     days_ago: float,
+    *,
     is_from_me: bool = False,
     handle_id: int = 1,
     cache_roomnames: str | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """Build a dict matching the schema returned by query_messages_db."""
     msg_time = datetime.now(timezone.utc) - timedelta(days=days_ago)
     ns_timestamp = int((msg_time - _APPLE_EPOCH).total_seconds() * 1_000_000_000)
@@ -79,9 +83,10 @@ def test_default_hours_at_least_30_days():
     """The default hours parameter must be >= 720 (30 days), not 24."""
     sig = inspect.signature(fuzzy_search_messages)
     default_hours = sig.parameters["hours"].default
-    assert default_hours >= 720, (
-        f"Default hours={default_hours}, expected >= 720 (30 days). "
-        f"A 24-hour default causes messages from days ago to be invisible."
+    assert default_hours >= _HOURS_IN_30_DAYS, (
+        f"Default hours={default_hours}, expected >= {_HOURS_IN_30_DAYS} "
+        f"(30 days). A 24-hour default causes messages from days ago to be "
+        f"invisible."
     )
 
 
@@ -157,7 +162,7 @@ def test_exact_match_scores_higher_than_fuzzy():
     result, _ = _mock_db_and_call(msgs, "divorce", threshold=0.3)
     lines = result.strip().split("\n")
     # First match line (after header) should be the exact one
-    match_lines = [l for l in lines if "Score:" in l]
+    match_lines = [line for line in lines if "Score:" in line]
     assert len(match_lines) >= 1
     assert "divorce papers" in match_lines[0], (
         f"Expected exact match 'divorce papers' to be ranked first, "

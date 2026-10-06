@@ -1,3 +1,4 @@
+# Copyright (c) 2023 Carter Lasalle
 """Tests for attachment finding and download.
 
 Style follows the rest of the suite: pytest-style functions with mocking. We
@@ -8,8 +9,6 @@ filtering, formatting, and progressive-disclosure behaviours all work.
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
-
-from mcp.server.fastmcp import Image
 
 from mac_messages_mcp.messages import (
     _attachments_for_message_ids,
@@ -66,7 +65,7 @@ def test_keeps_normal_image():
 
 def test_drops_sticker():
     rows = [make_attachment_row(is_sticker=1)]
-    assert _filter_excluded_attachments(rows) == []
+    assert not _filter_excluded_attachments(rows)
 
 
 def test_drops_plugin_payload_uti():
@@ -76,7 +75,7 @@ def test_drops_plugin_payload_uti():
             mime_type=None,
         ),
     ]
-    assert _filter_excluded_attachments(rows) == []
+    assert not _filter_excluded_attachments(rows)
 
 
 def test_drops_pluginpayloadattachment_filename():
@@ -86,7 +85,7 @@ def test_drops_pluginpayloadattachment_filename():
             uti=None,
         ),
     ]
-    assert _filter_excluded_attachments(rows) == []
+    assert not _filter_excluded_attachments(rows)
 
 
 def test_keeps_pdf():
@@ -106,7 +105,7 @@ def test_keeps_pdf():
 @patch("mac_messages_mcp.messages.query_messages_db")
 def test_empty_input_short_circuits(mock_query):
     result = _attachments_for_message_ids([])
-    assert result == {}
+    assert not result
     mock_query.assert_not_called()
 
 
@@ -139,14 +138,14 @@ def test_filters_excluded_in_default(mock_query):
 def test_message_with_no_attachments_absent_from_dict(mock_query):
     mock_query.return_value = []
     result = _attachments_for_message_ids([10, 20])
-    assert result == {}
+    assert not result
 
 
 @patch("mac_messages_mcp.messages.query_messages_db")
 def test_db_error_returns_empty_dict(mock_query):
     mock_query.return_value = [{"error": "no full disk access"}]
     result = _attachments_for_message_ids([10])
-    assert result == {}
+    assert not result
 
 
 # Tier 2 tool: top-level attachment search returning formatted text.
@@ -161,7 +160,7 @@ def test_no_results_message(mock_query):
 
 @patch("mac_messages_mcp.messages.get_contact_name", return_value="Elizabeth")
 @patch("mac_messages_mcp.messages.query_messages_db")
-def test_formats_attachment_metadata(mock_query, _name):
+def test_formats_attachment_metadata(mock_query, *_):
     with tempfile.TemporaryDirectory() as tmp:
         attachment = Path(tmp) / "invitation.jpg"
         attachment.write_bytes(b"\xff\xd8\xff\xd9")
@@ -207,7 +206,7 @@ def test_date_range_params_passed(mock_query):
 
 @patch("mac_messages_mcp.messages.get_contact_name", return_value="Someone")
 @patch("mac_messages_mcp.messages.query_messages_db")
-def test_limit_caps_results(mock_query, _name):
+def test_limit_caps_results(mock_query, *_):
     mock_query.return_value = [
         make_attachment_row(rowid=i, message_id=10 + i, mime_type="image/jpeg")
         for i in range(50)
@@ -217,14 +216,14 @@ def test_limit_caps_results(mock_query, _name):
     assert result.count("image/jpeg") == 10
 
 
-@patch("mac_messages_mcp.messages.os.path.exists", return_value=False)
-@patch("mac_messages_mcp.messages.get_contact_name", return_value="Someone")
 @patch("mac_messages_mcp.messages.query_messages_db")
-def test_marks_missing_files_but_keeps_them(mock_query, _name, _exists):
-    mock_query.return_value = [
-        make_attachment_row(rowid=42, mime_type="image/jpeg"),
-    ]
-    result = search_attachments()
+def test_marks_missing_files_but_keeps_them(mock_query, tmp_path):
+    missing = tmp_path / "missing.jpg"
+    row = make_attachment_row(rowid=42, mime_type="image/jpeg")
+    row["filename"] = str(missing)
+    mock_query.return_value = [row]
+    with patch("mac_messages_mcp.messages.get_contact_name", return_value="Someone"):
+        result = search_attachments()
     assert "42" in result
     assert "missing" in result.lower()
 
@@ -240,12 +239,12 @@ def test_unknown_id_returns_error(mock_query):
     assert "not found" in result.lower()
 
 
-@patch("mac_messages_mcp.messages.os.path.exists", return_value=False)
 @patch("mac_messages_mcp.messages.query_messages_db")
-def test_missing_on_disk_returns_path_with_warning(mock_query, _exists):
-    mock_query.return_value = [
-        make_attachment_row(rowid=42, mime_type="image/jpeg"),
-    ]
+def test_missing_on_disk_returns_path_with_warning(mock_query, tmp_path):
+    missing = tmp_path / "missing.jpg"
+    row = make_attachment_row(rowid=42, mime_type="image/jpeg")
+    row["filename"] = str(missing)
+    mock_query.return_value = [row]
     result = get_attachment(42)
     assert isinstance(result, str)
     assert "missing" in result.lower()
@@ -299,7 +298,9 @@ def test_oversize_image_falls_back_to_path(mock_query):
 
 @patch("mac_messages_mcp.messages.query_messages_db")
 def test_jpeg_returns_path_and_image(mock_query):
-    """Always-path contract: inline image returns BOTH path metadata AND inline bytes."""
+    """Always-path contract: inline image returns path metadata AND inline bytes."""
+    from mcp.server.fastmcp import Image
+
     # One-pixel valid JPEG
     jpeg_bytes = bytes.fromhex(
         "ffd8ffe000104a46494600010100000100010000ffdb0043000806060706050806070707"
@@ -335,7 +336,7 @@ def test_jpeg_returns_path_and_image(mock_query):
 
 
 def test_empty_returns_empty_string():
-    assert _format_attachment_summary([]) == ""
+    assert not _format_attachment_summary([])
 
 
 def test_single_attachment():
@@ -367,12 +368,8 @@ def test_multiple_attachments_short():
 
 
 @patch("mac_messages_mcp.messages._attachments_for_message_ids")
-@patch("mac_messages_mcp.messages.get_chat_mapping", return_value={})
-@patch("mac_messages_mcp.messages.get_contact_name", return_value="Elizabeth")
 @patch("mac_messages_mcp.messages.query_messages_db")
-def test_appends_attachment_summary_to_recent_messages(
-    mock_query, _name, _mapping, mock_atts
-):
+def test_appends_attachment_summary_to_recent_messages(mock_query, mock_atts):
     # Two messages: one with an attachment, one without
     mock_query.return_value = [
         {
@@ -397,7 +394,11 @@ def test_appends_attachment_summary_to_recent_messages(
     mock_atts.return_value = {
         100: [{"id": 42, "mime_type": "image/jpeg", "filename": "invite.jpg"}],
     }
-    result = get_recent_messages(hours=24)
+    with (
+        patch("mac_messages_mcp.messages.get_chat_mapping", return_value={}),
+        patch("mac_messages_mcp.messages.get_contact_name", return_value="Elizabeth"),
+    ):
+        result = get_recent_messages(hours=24)
     # Message 100 line should mention attachment id 42
     assert "42" in result
     assert "image/jpeg" in result
@@ -409,13 +410,8 @@ def test_appends_attachment_summary_to_recent_messages(
 @patch("mac_messages_mcp.messages.get_chat_mapping", return_value={})
 @patch("mac_messages_mcp.messages.get_contact_name", return_value="Elizabeth")
 @patch("mac_messages_mcp.messages.query_messages_db")
-def test_no_attachments_does_not_change_existing_format(
-    mock_query,
-    _name,
-    _mapping,
-    _atts,
-):
-    """Backwards-compat: when no message has attachments, output is exactly the old format."""
+def test_no_attachments_does_not_change_existing_format(mock_query, *_):
+    """Backwards-compat: with no attachments, output is exactly the old format."""
     mock_query.return_value = [
         {
             "ROWID": 100,
@@ -438,12 +434,8 @@ def test_no_attachments_does_not_change_existing_format(
 
 
 @patch("mac_messages_mcp.messages._attachments_for_message_ids")
-@patch("mac_messages_mcp.messages.get_chat_mapping", return_value={})
-@patch("mac_messages_mcp.messages.get_contact_name", return_value="Elizabeth")
 @patch("mac_messages_mcp.messages.query_messages_db")
-def test_appends_attachment_summary_to_fuzzy_search(
-    mock_query, _name, _mapping, mock_atts
-):
+def test_appends_attachment_summary_to_fuzzy_search(mock_query, mock_atts):
     mock_query.return_value = [
         {
             "ROWID": 100,
@@ -458,6 +450,10 @@ def test_appends_attachment_summary_to_fuzzy_search(
     mock_atts.return_value = {
         100: [{"id": 7, "mime_type": "image/heic", "filename": "lowen.heic"}],
     }
-    result = fuzzy_search_messages("birthday", hours=24, threshold=0.5)
+    with (
+        patch("mac_messages_mcp.messages.get_chat_mapping", return_value={}),
+        patch("mac_messages_mcp.messages.get_contact_name", return_value="Elizabeth"),
+    ):
+        result = fuzzy_search_messages("birthday", hours=24, threshold=0.5)
     assert "7" in result
     assert "image/heic" in result

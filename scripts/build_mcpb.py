@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
+# Copyright (c) 2023 Carter Lasalle
 """Build script for the Mac Messages MCP Claude Desktop extension (.mcpb).
 
 Vendors a `uv` binary into the bundle so the packaged extension runs on
 machines that don't have `uv` installed, then runs `mcpb pack`.
 
 Usage:
-    python scripts/build_mcpb.py [--arch arm64|x86_64] [--uv-version X.Y.Z] [--no-bundle]
+    python scripts/build_mcpb.py [--arch arm64|x86_64]
+        [--uv-version X.Y.Z] [--no-bundle]
     python scripts/build_mcpb.py --help
 
 Options:
@@ -59,7 +61,7 @@ BUNDLED_COMMAND = "${__dirname}/bin/uv"
 
 
 def print_help():
-    """Print help information"""
+    """Print help information."""
     print(__doc__)
     sys.exit(0)
 
@@ -75,16 +77,32 @@ def resolve_asset(arch):
     return asset
 
 
-def _download(url):
-    """Download a GitHub uv release URL and return the raw bytes."""
+def download(url):
+    """Download a GitHub uv release URL and return the raw bytes.
+
+    Raises
+    ------
+    ValueError
+        If ``url`` is not a pinned uv release URL.
+
+    """
     if not url.startswith(UV_DOWNLOAD_PREFIX):
-        raise ValueError(f"refusing to download untrusted URL: {url}")
+        msg = f"refusing to download untrusted URL: {url}"
+        raise ValueError(msg)
     print(f"Downloading {url}")
     return _https_get_allowlisted(url)
 
 
 def _https_get_allowlisted(url):
-    """GET `url` over HTTPS, following redirects only to known GitHub hosts."""
+    """GET `url` over HTTPS, following redirects only to known GitHub hosts.
+
+    Raises
+    ------
+    ValueError
+        If a URL is not an allowlisted HTTPS GitHub host, the response is not
+        a redirect or 200, or the redirect limit is exceeded.
+
+    """
     current = url
     for _ in range(_MAX_DOWNLOAD_REDIRECTS):
         parsed = urlparse(current)
@@ -93,7 +111,8 @@ def _https_get_allowlisted(url):
             or not parsed.hostname
             or parsed.hostname not in _ALLOWED_DOWNLOAD_HOSTS
         ):
-            raise ValueError(f"refusing to download untrusted URL: {current}")
+            msg = f"refusing to download untrusted URL: {current}"
+            raise ValueError(msg)
         path = parsed.path or "/"
         if parsed.query:
             path = f"{path}?{parsed.query}"
@@ -108,29 +127,32 @@ def _https_get_allowlisted(url):
                 headers={"User-Agent": "mac-messages-mcp-mcpb-builder"},
             )
             response = connection.getresponse()
-            if response.status in (301, 302, 303, 307, 308):
+            if response.status in {301, 302, 303, 307, 308}:
                 location = response.getheader("Location")
                 response.read()
                 if not location:
-                    raise ValueError(f"redirect without Location from {current}")
+                    msg = f"redirect without Location from {current}"
+                    raise ValueError(msg)
                 current = urljoin(current, location)
                 continue
             if response.status != 200:
+                msg = f"download failed: HTTP {response.status} for {current}"
                 raise ValueError(
-                    f"download failed: HTTP {response.status} for {current}",
+                    msg,
                 )
             return response.read()
         finally:
             connection.close()
-    raise ValueError(f"too many redirects downloading {url}")
+    msg = f"too many redirects downloading {url}"
+    raise ValueError(msg)
 
 
 def vendor_uv(asset, version):
     """Download, checksum-verify, and extract the uv binary into bin/uv."""
     url = UV_DOWNLOAD_URL.format(version=version, asset=asset)
-    archive = _download(url)
+    archive = download(url)
 
-    expected = _download(url + ".sha256").decode().split()[0]
+    expected = download(url + ".sha256").decode().split()[0]
     actual = hashlib.sha256(archive).hexdigest()
     if actual != expected:
         print("Error: checksum mismatch for uv download")
@@ -164,23 +186,26 @@ def pack(bundle):
     The tracked manifest.json is always restored afterwards so the default
     system-uv flow stays unchanged.
     """
-    original = MANIFEST_PATH.read_text()
+    original = MANIFEST_PATH.read_text(encoding="utf-8")
     try:
         if bundle:
             manifest = json.loads(original)
             manifest["server"]["mcp_config"]["command"] = BUNDLED_COMMAND
-            MANIFEST_PATH.write_text(json.dumps(manifest, indent=2) + "\n")
+            MANIFEST_PATH.write_text(
+                json.dumps(manifest, indent=2) + "\n",
+                encoding="utf-8",
+            )
             print(f"manifest command -> {BUNDLED_COMMAND}")
-        subprocess.run(mcpb_cli() + ["pack"], check=True)
+        subprocess.run([*mcpb_cli(), "pack"], check=True, shell=False)
     finally:
-        MANIFEST_PATH.write_text(original)
+        MANIFEST_PATH.write_text(original, encoding="utf-8")
         if bundle:
             print("Restored manifest.json")
 
 
 def main():
     args = sys.argv[1:]
-    if any(a in ("-h", "--help", "help") for a in args):
+    if any(a in {"-h", "--help", "help"} for a in args):
         print_help()
 
     arch = None

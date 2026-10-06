@@ -1,3 +1,4 @@
+# Copyright (c) 2023 Carter Lasalle
 import importlib.util
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -24,7 +25,7 @@ def _https_response(status, body=b"", location=None):
 
 def test_download_rejects_non_release_url():
     with pytest.raises(ValueError, match="untrusted URL"):
-        build_mcpb._download("https://evil.example/payload")
+        build_mcpb.download("https://evil.example/payload")
 
 
 def test_download_allows_pinned_uv_release_url():
@@ -39,7 +40,7 @@ def test_download_allows_pinned_uv_release_url():
         "HTTPSConnection",
         return_value=connection,
     ) as mock_conn:
-        assert build_mcpb._download(url) == b"uv"
+        assert build_mcpb.download(url) == b"uv"
         mock_conn.assert_called_once()
         assert mock_conn.call_args[0][0] == "github.com"
         connection.request.assert_called_once()
@@ -61,11 +62,11 @@ def test_download_follows_allowlisted_redirect():
     objects = MagicMock()
     objects.getresponse.return_value = _https_response(200, b"uv-bytes")
 
-    def _connect(host, timeout=None):
+    def _connect(host, **_connection_kwargs):
         return github if host == "github.com" else objects
 
     with patch.object(build_mcpb.http.client, "HTTPSConnection", side_effect=_connect):
-        assert build_mcpb._download(url) == b"uv-bytes"
+        assert build_mcpb.download(url) == b"uv-bytes"
     objects.request.assert_called_once()
     assert objects.request.call_args[0][1] == "/uv.tar.gz"
 
@@ -88,4 +89,4 @@ def test_download_refuses_redirect_off_github():
         ),
         pytest.raises(ValueError, match="untrusted URL"),
     ):
-        build_mcpb._download(url)
+        build_mcpb.download(url)

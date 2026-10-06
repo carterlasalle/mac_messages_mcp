@@ -1,3 +1,4 @@
+# Copyright (c) 2023 Carter Lasalle
 """Tests for Apple-epoch timestamp conversion.
 
 These tests pin behaviour around the project's Apple-ns <-> datetime
@@ -138,16 +139,14 @@ def test_seconds_format_row_renders_expected_year(mock_query, *_):
 @patch("mac_messages_mcp.messages.get_chat_mapping", return_value={})
 @patch("mac_messages_mcp.messages.query_messages_db")
 def test_window_param_is_apple_ns_within_tolerance(mock_query, *_):
-    """The first param (the time-window cutoff) should be an
-    Apple-ns string that decodes to roughly (now - hours).
-    """
+    """The first param should be an Apple-ns string for roughly (now - hours)."""
     mock_query.return_value = []
     before = datetime.now(timezone.utc)
     fuzzy_search_messages(search_term="x", hours=24, threshold=0.5)
     after = datetime.now(timezone.utc)
 
     # First call's first positional arg = sql, second = params tuple
-    _sql, params = mock_query.call_args[0]
+    params = mock_query.call_args[0][1]
     # Time-window cutoff is the first param (insert(0, ...) in source)
     cutoff_str = params[0]
     assert isinstance(cutoff_str, str)
@@ -168,7 +167,7 @@ def test_zero_hours_omits_time_window(mock_query, *_):
     """The hours=0 ('all time') branch must not emit a time cutoff."""
     mock_query.return_value = []
     fuzzy_search_messages(search_term="x", hours=0, threshold=0.5)
-    sql, _params = mock_query.call_args[0]
+    sql = mock_query.call_args[0][0]
     # When hours=0, no time cutoff is inserted -- so the LIKE param is
     # the first positional. There should be no Apple-ns-shaped string.
     assert "CAST(m.date AS TEXT) >" not in sql

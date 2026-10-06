@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2023 Carter Lasalle
 """Synchronize project release versions using uv.
 
 Usage:
@@ -51,11 +52,19 @@ def _read_string_assignment(line: str) -> tuple[str, str] | None:
 
 
 def _read_project_metadata(path: Path) -> tuple[str, str]:
-    """Read project name/version without adding a Python 3.10 TOML dependency."""
+    """Read project name/version without adding a Python 3.10 TOML dependency.
+
+    Raises
+    ------
+    VersionError
+        If the file is missing or does not carry the expected name/version.
+
+    """
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except FileNotFoundError as exc:
-        raise VersionError(f"Required file not found: {path}") from exc
+        msg = f"Required file not found: {path}"
+        raise VersionError(msg) from exc
 
     in_project = False
     project_name = None
@@ -77,18 +86,27 @@ def _read_project_metadata(path: Path) -> tuple[str, str]:
             project_version = value
 
     if project_name != PROJECT_NAME or project_version is None:
+        msg = "pyproject.toml is missing the expected project name/version"
         raise VersionError(
-            "pyproject.toml is missing the expected project name/version",
+            msg,
         )
     return project_name, project_version
 
 
 def _read_lock_version(path: Path) -> str:
-    """Read this project's package version from uv.lock."""
+    """Read this project's package version from uv.lock.
+
+    Raises
+    ------
+    VersionError
+        If the file is missing or has no package entry for this project.
+
+    """
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except FileNotFoundError as exc:
-        raise VersionError(f"Required file not found: {path}") from exc
+        msg = f"Required file not found: {path}"
+        raise VersionError(msg) from exc
 
     package_name = None
     package_version = None
@@ -120,23 +138,34 @@ def _read_lock_version(path: Path) -> str:
 
     if package_name == PROJECT_NAME and package_version is not None:
         return package_version
-    raise VersionError(f"uv.lock has no package entry for {PROJECT_NAME}")
+    msg = f"uv.lock has no package entry for {PROJECT_NAME}"
+    raise VersionError(msg)
 
 
 def read_versions(root: Path) -> dict[str, str]:
-    """Read the version from all release metadata files."""
+    """Read the version from all release metadata files.
+
+    Raises
+    ------
+    VersionError
+        If any metadata file is missing, malformed, or lacks a version string.
+
+    """
     _, project_version = _read_project_metadata(root / "pyproject.toml")
 
     manifest_path = root / "manifest.json"
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
-        raise VersionError(f"Required file not found: {manifest_path}") from exc
+        msg = f"Required file not found: {manifest_path}"
+        raise VersionError(msg) from exc
     except json.JSONDecodeError as exc:
-        raise VersionError(f"Invalid JSON in {manifest_path}: {exc}") from exc
+        msg = f"Invalid JSON in {manifest_path}: {exc}"
+        raise VersionError(msg) from exc
     manifest_version = manifest.get("version")
     if not isinstance(manifest_version, str):
-        raise VersionError("manifest.json is missing a string version")
+        msg = "manifest.json is missing a string version"
+        raise VersionError(msg)
 
     lock_version = _read_lock_version(root / "uv.lock")
 
@@ -153,7 +182,14 @@ def validate_versions(
     expected: str | None = None,
     ignore_lock: bool = False,
 ) -> str:
-    """Return the synchronized version or raise VersionError."""
+    """Return the synchronized version or raise VersionError.
+
+    Raises
+    ------
+    VersionError
+        If the metadata versions disagree or do not match ``expected``.
+
+    """
     versions = read_versions(root)
     compared = {
         name: version
@@ -163,11 +199,13 @@ def validate_versions(
     unique = set(compared.values())
     if len(unique) != 1:
         details = ", ".join(f"{name}={version}" for name, version in compared.items())
-        raise VersionError(f"Version metadata is inconsistent: {details}")
+        msg = f"Version metadata is inconsistent: {details}"
+        raise VersionError(msg)
 
     version = next(iter(unique))
     if expected is not None and version != expected:
-        raise VersionError(f"Expected version {expected}, found {version}")
+        msg = f"Expected version {expected}, found {version}"
+        raise VersionError(msg)
     return version
 
 
@@ -190,7 +228,8 @@ def sync_manifest(root: Path, version: str) -> None:
     try:
         manifest = json.loads(path.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError) as exc:
-        raise VersionError(f"Cannot update {path}: {exc}") from exc
+        msg = f"Cannot update {path}: {exc}"
+        raise VersionError(msg) from exc
     manifest["version"] = version
     _atomic_write_json(path, manifest)
 
@@ -212,28 +251,43 @@ def _restore(snapshot: dict[Path, bytes | None]) -> None:
 
 
 def set_version(root: Path, target: str, *, dry_run: bool = False) -> str:
-    """Use uv to update pyproject.toml/uv.lock, then sync manifest.json."""
+    """Use uv to update pyproject.toml/uv.lock, then sync manifest.json.
+
+    Raises
+    ------
+    VersionError
+        If ``uv`` is unavailable, ``target`` is not a supported bump kind or
+        stable version, or the updated metadata cannot be validated.
+    OSError
+        If a metadata file cannot be written.
+    CalledProcessError
+        If ``uv version`` exits non-zero; the metadata snapshot is restored
+        before the error propagates.
+
+    """
     if shutil.which("uv") is None:
-        raise VersionError("uv is required but was not found on PATH")
+        msg = "uv is required but was not found on PATH"
+        raise VersionError(msg)
 
     if target in BUMP_KINDS:
         version_args = ["--bump", target]
     elif STABLE_VERSION_RE.fullmatch(target):
         version_args = [target]
     else:
+        msg = "Version target must be major, minor, patch, or a stable X.Y.Z version"
         raise VersionError(
-            "Version target must be major, minor, patch, or a stable X.Y.Z version",
+            msg,
         )
 
     command = ["uv", "version", *version_args, "--no-sync"]
     if dry_run:
         command.append("--dry-run")
-        subprocess.run(command, cwd=root, check=True)
+        subprocess.run(command, cwd=root, check=True, shell=False)
         return validate_versions(root, ignore_lock=False)
 
     snapshot = _snapshot(root, VERSION_FILES)
     try:
-        subprocess.run(command, cwd=root, check=True)
+        subprocess.run(command, cwd=root, check=True, shell=False)
         pyproject_version = read_versions(root)["pyproject.toml"]
         sync_manifest(root, pyproject_version)
         return validate_versions(root, expected=pyproject_version)
@@ -269,32 +323,57 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _run_check(args: argparse.Namespace, root: Path) -> int:
+    """Validate metadata without writing; return the process exit code.
+
+    Raises
+    ------
+    VersionError
+        If ``--check`` is combined with a target or ``--dry-run``, or the
+        metadata is inconsistent.
+
+    """
+    if args.target or args.dry_run:
+        msg = "--check cannot be combined with a version target or --dry-run"
+        raise VersionError(msg)
+    version = validate_versions(
+        root,
+        expected=args.expected,
+        ignore_lock=args.ignore_lock,
+    )
+    print(version)
+    return 0
+
+
+def _run_update(args: argparse.Namespace, root: Path) -> int:
+    """Apply a version bump; return the process exit code.
+
+    Raises
+    ------
+    VersionError
+        If a check-only flag is passed without ``--check``, or no target is
+        given.
+
+    """
+    if args.expected or args.ignore_lock:
+        msg = "--expected and --ignore-lock require --check"
+        raise VersionError(msg)
+    if not args.target:
+        msg = "Provide major, minor, patch, X.Y.Z, or --check"
+        raise VersionError(msg)
+    version = set_version(root, args.target, dry_run=args.dry_run)
+    if not args.dry_run:
+        print(f"Version synchronized at {version} ({', '.join(VERSION_FILES)})")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
+    """Run the release-version CLI; return the process exit code."""
     args = build_parser().parse_args(argv)
     root = args.root.resolve()
+    action = _run_check if args.check else _run_update
     try:
-        if args.check:
-            if args.target or args.dry_run:
-                raise VersionError(
-                    "--check cannot be combined with a version target or --dry-run",
-                )
-            version = validate_versions(
-                root,
-                expected=args.expected,
-                ignore_lock=args.ignore_lock,
-            )
-            print(version)
-            return 0
-
-        if args.expected or args.ignore_lock:
-            raise VersionError("--expected and --ignore-lock require --check")
-        if not args.target:
-            raise VersionError("Provide major, minor, patch, X.Y.Z, or --check")
-
-        version = set_version(root, args.target, dry_run=args.dry_run)
-        if not args.dry_run:
-            print(f"Version synchronized at {version} ({', '.join(VERSION_FILES)})")
-        return 0
+        return action(args, root)
     except VersionError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2

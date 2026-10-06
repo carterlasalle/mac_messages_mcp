@@ -1,14 +1,12 @@
-"""Tests for the messages module"""
+# Copyright (c) 2023 Carter Lasalle
+"""Tests for the messages module."""
 
 import os
 import pathlib
 import sqlite3
 import subprocess
 import tempfile
-import unittest
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from mac_messages_mcp.messages import (
     _check_imessage_availability,
@@ -36,17 +34,17 @@ from mac_messages_mcp.messages import (
     send_message,
     set_recent_contact_matches,
 )
-from tests.test_phone import region_pinned
+
+from .test_phone import region_pinned
 
 # Tests for the messages module
 
 
 @patch("subprocess.Popen")
 def test_run_applescript_success(mock_popen):
-    """Test running AppleScript successfully"""
+    """Test running AppleScript successfully."""
     # Setup mock
-    process_mock = MagicMock()
-    process_mock.returncode = 0
+    process_mock = MagicMock(returncode=0)
     process_mock.communicate.return_value = (b"Success", b"")
     mock_popen.return_value = process_mock
 
@@ -65,10 +63,9 @@ def test_run_applescript_success(mock_popen):
 
 @patch("subprocess.Popen")
 def test_run_applescript_error(mock_popen):
-    """Test running AppleScript with error"""
+    """Test running AppleScript with error."""
     # Setup mock
-    process_mock = MagicMock()
-    process_mock.returncode = 1
+    process_mock = MagicMock(returncode=1)
     process_mock.communicate.return_value = (b"", b"Error message")
     mock_popen.return_value = process_mock
 
@@ -95,8 +92,10 @@ def test_run_applescript_timeout_kills_process(mock_popen):
 
 
 def test_readonly_connection_rejects_writes():
+    import pytest
+
     with tempfile.TemporaryDirectory() as directory:
-        db_path = os.path.join(directory, "messages.db")
+        db_path = str(pathlib.Path(directory) / "messages.db")
         writable = sqlite3.connect(db_path)
         writable.execute("CREATE TABLE message (id INTEGER)")
         writable.commit()
@@ -114,7 +113,7 @@ def test_readonly_connection_rejects_writes():
 
 @patch("os.path.expanduser")
 def test_get_messages_db_path(mock_expanduser):
-    """Test getting the Messages database path"""
+    """Test getting the Messages database path."""
     # Setup mock
     mock_expanduser.return_value = "/Users/testuser"
 
@@ -130,7 +129,7 @@ def test_get_messages_db_path(mock_expanduser):
 
 
 def test_plain_text_unchanged():
-    """Test that plain text passes through unchanged"""
+    """Test that plain text passes through unchanged."""
     # Run function
     result = escape_applescript("hello world")
 
@@ -139,7 +138,7 @@ def test_plain_text_unchanged():
 
 
 def test_quotes_escaped():
-    """Test that double quotes are escaped"""
+    """Test that double quotes are escaped."""
     # Run function
     result = escape_applescript('say "hello"')
 
@@ -148,7 +147,7 @@ def test_quotes_escaped():
 
 
 def test_backslashes_escaped():
-    """Test that backslashes are escaped"""
+    """Test that backslashes are escaped."""
     # Run function
     result = escape_applescript("path\\to\\file")
 
@@ -157,7 +156,7 @@ def test_backslashes_escaped():
 
 
 def test_escape_order_prevents_injection():
-    """Test that backslashes are escaped before quotes to prevent injection"""
+    """Test that backslashes are escaped before quotes to prevent injection."""
     # Setup - a string with backslash-quote that could break AppleScript if
     # quotes are escaped first (producing \\" which unescapes the quote)
     malicious = 'test\\"injection'
@@ -175,16 +174,16 @@ def test_escape_order_prevents_injection():
 
 
 def test_empty_string():
-    """Test that empty string returns empty string"""
+    """Test that empty string returns empty string."""
     # Run function
     result = escape_applescript("")
 
     # Check results
-    assert result == ""
+    assert not result
 
 
 def test_unicode_unchanged():
-    """Test that unicode characters pass through unchanged"""
+    """Test that unicode characters pass through unchanged."""
     # Run function
     result = escape_applescript("Hello 世界")
 
@@ -233,9 +232,7 @@ def test_long_messages_are_truncated():
 @patch("mac_messages_mcp.messages.query_messages_db")
 @patch("mac_messages_mcp.messages.run_applescript")
 def test_does_not_raise_name_error(mock_applescript, mock_query_db):
-    """Test that safe_recipient is defined (was NameError after merge)"""
-    from mac_messages_mcp.messages import _send_message_to_recipient
-
+    """Test that safe_recipient is defined (was NameError after merge)."""
     # Setup mocks: AppleScript accepts the send, and chat.db shows it
     # went through so the result reports success rather than the
     # NameError this used to raise.
@@ -260,9 +257,7 @@ def test_does_not_raise_name_error(mock_applescript, mock_query_db):
 @patch("mac_messages_mcp.messages.query_messages_db")
 @patch("mac_messages_mcp.messages.run_applescript")
 def test_recipient_with_quotes_is_escaped(mock_applescript, mock_query_db):
-    """Test that quotes in recipient don't break the AppleScript command"""
-    from mac_messages_mcp.messages import _send_message_to_recipient
-
+    """Test that quotes in recipient don't break the AppleScript command."""
     # Setup mocks
     mock_applescript.return_value = "Success"
     mock_query_db.return_value = [
@@ -417,8 +412,8 @@ def test_phone_formatter_rejects_locally_dialable_form():
     instead of being reported back to the caller.
     """
     with region_pinned("US"):
-        assert _format_phone_for_messages("555-0142") == ""
-        assert _format_phone_for_messages("5550142") == ""
+        assert not _format_phone_for_messages("555-0142")
+        assert not _format_phone_for_messages("5550142")
 
 
 def test_phone_formatter_accepts_national_plans_shorter_than_ten_digits():
@@ -446,7 +441,7 @@ def test_phone_formatter_accepts_legitimate_national_and_e164_numbers():
 
 @patch("mac_messages_mcp.messages._send_message_to_recipient")
 def test_send_message_rejects_locally_dialable_form(mock_send):
-    """send_message reports the guard error instead of dispatching a half-typed number."""
+    """Report the guard error instead of dispatching a half-typed number."""
     with region_pinned("US"):
         result = send_message("555-0142", "hello")
 
@@ -501,7 +496,7 @@ def test_find_contact_returns_messages_ready_phone_number(mock_contacts):
 @patch("mac_messages_mcp.messages.query_messages_db")
 @patch("mac_messages_mcp.messages.run_applescript")
 def test_temp_file_uses_unique_name(mock_applescript, mock_query_db):
-    """Test that temp file gets a unique name (not hardcoded imessage_tmp.txt)"""
+    """Test that temp file gets a unique name (not hardcoded imessage_tmp.txt)."""
     mock_applescript.return_value = ""
     mock_query_db.return_value = [
         {
@@ -523,17 +518,14 @@ def test_temp_file_uses_unique_name(mock_applescript, mock_query_db):
     # Should reference a unique owner-only mkstemp path
     assert "mac-messages-" in script
     assert (
-        "/tmp/" in script or "/var/folders/" in script
+        tempfile.gettempdir() in script
     ), f"Expected temp directory path in script, got: {script[:200]}"
 
 
 @patch("mac_messages_mcp.messages.query_messages_db")
 @patch("mac_messages_mcp.messages.run_applescript")
 def test_temp_file_cleaned_up_on_success(mock_applescript, mock_query_db):
-    """Test that temp file is removed after successful send"""
-    import glob
-    import os
-
+    """Test that temp file is removed after successful send."""
     mock_applescript.return_value = ""
     mock_query_db.return_value = [
         {
@@ -546,35 +538,30 @@ def test_temp_file_cleaned_up_on_success(mock_applescript, mock_query_db):
     ]
 
     # Count temp files before
-    tmpdir = tempfile.gettempdir()
-    before = set(glob.glob(os.path.join(tmpdir, "mac-messages-*.txt")))
+    tmpdir = pathlib.Path(tempfile.gettempdir())
+    before = set(tmpdir.glob("mac-messages-*.txt"))
 
     # Run function
     _send_message_to_recipient("+15551234567", "test message")
 
-    # Count temp files after - should not have leaked
-    after = set(glob.glob(os.path.join(tmpdir, "mac-messages-*.txt")))
+    after = set(tmpdir.glob("mac-messages-*.txt"))
     leaked = after - before
     assert len(leaked) == 0, f"Temp files leaked: {leaked}"
 
 
 @patch("mac_messages_mcp.messages.run_applescript")
 def test_temp_file_cleaned_up_on_error(mock_applescript):
-    """Test that temp file is removed even when AppleScript fails"""
-    import glob
-    import os
-
+    """Test that temp file is removed even when AppleScript fails."""
     mock_applescript.return_value = "Error: some failure"
 
     # Count temp files before
-    tmpdir = tempfile.gettempdir()
-    before = set(glob.glob(os.path.join(tmpdir, "mac-messages-*.txt")))
+    tmpdir = pathlib.Path(tempfile.gettempdir())
+    before = set(tmpdir.glob("mac-messages-*.txt"))
 
     # Run function (will fall back to _send_message_direct which also uses applescript)
     _send_message_to_recipient("+15551234567", "test message")
 
-    # Count temp files after
-    after = set(glob.glob(os.path.join(tmpdir, "mac-messages-*.txt")))
+    after = set(tmpdir.glob("mac-messages-*.txt"))
     leaked = after - before
     assert len(leaked) == 0, f"Temp files leaked: {leaked}"
 
@@ -593,7 +580,7 @@ def test_temp_file_is_owner_only(mock_applescript, mock_query_db):
         assert match is not None, script
         path = match.group(1)
         seen_mode["path"] = path
-        seen_mode["mode"] = stat.S_IMODE(os.stat(path).st_mode)
+        seen_mode["mode"] = stat.S_IMODE(pathlib.Path(path).stat().st_mode)
         return ""
 
     mock_applescript.side_effect = inspect_script
@@ -609,7 +596,7 @@ def test_temp_file_is_owner_only(mock_applescript, mock_query_db):
 
     _send_message_to_recipient("+15551234567", "secret body")
 
-    assert "mac-messages-" in os.path.basename(seen_mode["path"])
+    assert "mac-messages-" in pathlib.Path(seen_mode["path"]).name
     assert seen_mode["mode"] == 384
     assert not pathlib.Path(seen_mode["path"]).exists()
 
@@ -626,7 +613,7 @@ def test_db_error_returns_empty_without_shell(mock_query, mock_run):
 
     result = get_addressbook_contacts()
 
-    assert result == {}
+    assert not result
     mock_run.assert_not_called()
 
 
@@ -635,7 +622,7 @@ def test_db_error_returns_empty_without_shell(mock_query, mock_run):
 
 @patch("mac_messages_mcp.messages.get_messages_db_path")
 def test_returns_mapping(mock_path):
-    """Test happy path returns dict of room_name -> display_name"""
+    """Test happy path returns dict of room_name -> display_name."""
     # Setup - create a temp DB with the expected schema
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
         db_path = f.name
@@ -659,7 +646,7 @@ def test_returns_mapping(mock_path):
 
 @patch("mac_messages_mcp.messages.get_messages_db_path")
 def test_inaccessible_db_returns_empty_dict(mock_path):
-    """Test that inaccessible database returns empty dict instead of crashing"""
+    """Test that inaccessible database returns empty dict instead of crashing."""
     # Setup
     mock_path.return_value = "/nonexistent/path/chat.db"
 
@@ -667,12 +654,12 @@ def test_inaccessible_db_returns_empty_dict(mock_path):
     result = get_chat_mapping()
 
     # Check results
-    assert result == {}
+    assert not result
 
 
 @patch("mac_messages_mcp.messages.get_messages_db_path")
 def test_empty_table_returns_empty_dict(mock_path):
-    """Test that empty chat table returns empty dict"""
+    """Test that empty chat table returns empty dict."""
     # Setup
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
         db_path = f.name
@@ -687,7 +674,7 @@ def test_empty_table_returns_empty_dict(mock_path):
         result = get_chat_mapping()
 
         # Check results
-        assert result == {}
+        assert not result
     finally:
         pathlib.Path(db_path).unlink()
 
@@ -723,13 +710,7 @@ def test_find_chat_by_identifier_accepts_short_chat_id(mock_query):
     return_value={"ROWID": 7, "display_name": "Family", "style": 43},
 )
 @patch("mac_messages_mcp.messages.query_messages_db")
-def test_get_recent_messages_filters_by_chat_id(
-    mock_query,
-    _chat,
-    _name,
-    _mapping,
-    _atts,
-):
+def test_get_recent_messages_filters_by_chat_id(mock_query, *_):
     mock_query.return_value = [
         {
             "ROWID": 100,
@@ -763,13 +744,7 @@ def test_get_recent_messages_filters_by_chat_id(
     },
 )
 @patch("mac_messages_mcp.messages.query_messages_db")
-def test_business_chat_gets_no_name_prefix(
-    mock_query,
-    _chat,
-    _name,
-    _mapping,
-    _atts,
-):
+def test_business_chat_gets_no_name_prefix(mock_query, *_):
     """1:1/business chats (style 45) must not prefix lines with [Name]."""
     mock_query.return_value = [
         {
@@ -799,7 +774,7 @@ def test_get_recent_messages_rejects_contact_and_chat_id():
 
 
 def test_apple_epoch_constant():
-    """Test that 978307200 is the correct offset between Unix and Apple epochs"""
+    """Test that 978307200 is the correct offset between Unix and Apple epochs."""
     from datetime import datetime, timezone
 
     # Setup
@@ -814,7 +789,7 @@ def test_apple_epoch_constant():
 
 
 def test_nanosecond_timestamp_conversion():
-    """Test converting a nanosecond Apple timestamp to a datetime"""
+    """Test converting a nanosecond Apple timestamp to a datetime."""
     from datetime import datetime, timezone
 
     # Setup - a known Apple timestamp in nanoseconds
@@ -836,7 +811,7 @@ def test_nanosecond_timestamp_conversion():
 
 
 def test_second_format_timestamp():
-    """Test converting a second-format Apple timestamp"""
+    """Test converting a second-format Apple timestamp."""
     from datetime import datetime, timezone
 
     # Setup - timestamp already in seconds (len <= 10)
@@ -856,7 +831,7 @@ def test_second_format_timestamp():
 
 
 def _build_blob(text: str) -> bytes:
-    """Build a minimal typedstream blob with the given text content"""
+    """Build a minimal typedstream blob with the given text content."""
     encoded = text.encode("utf-8")
     length = len(encoded)
     # NSString marker + 5-byte header (\x01\x00\x84\x01+) + length byte + text
@@ -875,97 +850,99 @@ def _build_blob(text: str) -> bytes:
     )
 
 
-class TestExtractBodyFromAttributed(unittest.TestCase):
-    """Tests for extract_body_from_attributed"""
+def test_extract_body_none_returns_none():
+    """Test that None input returns None."""
+    # Run function
+    result = extract_body_from_attributed(None)
 
-    def test_none_returns_none(self):
-        """Test that None input returns None"""
-        # Run function
-        result = extract_body_from_attributed(None)
+    # Check results
+    assert result is None
 
-        # Check results
-        assert result is None
 
-    def test_empty_bytes_returns_none(self):
-        """Test that empty bytes returns None"""
-        # Run function
-        result = extract_body_from_attributed(b"")
+def test_extract_body_empty_bytes_returns_none():
+    """Test that empty bytes returns None."""
+    # Run function
+    result = extract_body_from_attributed(b"")
 
-        # Check results
-        assert result is None
+    # Check results
+    assert result is None
 
-    def test_garbage_bytes_returns_none(self):
-        """Test that random bytes return None without crashing"""
-        # Run function
-        result = extract_body_from_attributed(b"\x00\x01\x02\x03")
 
-        # Check results
-        assert result is None
+def test_extract_body_garbage_bytes_returns_none():
+    """Test that random bytes return None without crashing."""
+    # Run function
+    result = extract_body_from_attributed(b"\x00\x01\x02\x03")
 
-    def test_valid_short_message(self):
-        """Test extracting a short message (length < 0x80)"""
-        # Setup
-        blob = _build_blob("Hello")
+    # Check results
+    assert result is None
 
-        # Run function
-        result = extract_body_from_attributed(blob)
 
-        # Check results
-        assert result == "Hello"
+def test_extract_body_valid_short_message():
+    """Test extracting a short message (length < 0x80)."""
+    # Setup
+    blob = _build_blob("Hello")
 
-    def test_valid_longer_message(self):
-        """Test extracting a message with 2-byte length encoding"""
-        # Setup
-        content = "A" * 200  # > 0x7F, triggers 0x81 length prefix
-        blob = _build_blob(content)
+    # Run function
+    result = extract_body_from_attributed(blob)
 
-        # Run function
-        result = extract_body_from_attributed(blob)
+    # Check results
+    assert result == "Hello"
 
-        # Check results
-        assert result == content
 
-    def test_no_nsstring_marker(self):
-        """Test that missing NSString marker returns None"""
-        # Setup
-        body = b"prefix data with no marker trailing"
+def test_extract_body_valid_longer_message():
+    """Test extracting a message with 2-byte length encoding."""
+    # Setup
+    content = "A" * 200  # > 0x7F, triggers 0x81 length prefix
+    blob = _build_blob(content)
 
-        # Run function
-        result = extract_body_from_attributed(body)
+    # Run function
+    result = extract_body_from_attributed(blob)
 
-        # Check results
-        assert result is None
+    # Check results
+    assert result == content
 
-    def test_truncated_after_nsstring(self):
-        """Test that truncated data after NSString returns None"""
-        # Setup - NSString marker but not enough bytes for header
-        body = b"NSString\x01\x00"
 
-        # Run function
-        result = extract_body_from_attributed(body)
+def test_extract_body_no_nsstring_marker():
+    """Test that missing NSString marker returns None."""
+    # Setup
+    body = b"prefix data with no marker trailing"
 
-        # Check results
-        assert result is None
+    # Run function
+    result = extract_body_from_attributed(body)
 
-    def test_random_binary_does_not_crash(self):
-        """Test that random binary data doesn't raise exceptions"""
-        import os
+    # Check results
+    assert result is None
 
-        # Setup
-        random_data = os.urandom(1024)
 
-        # Run function - should not raise
-        result = extract_body_from_attributed(random_data)
+def test_extract_body_truncated_after_nsstring():
+    """Test that truncated data after NSString returns None."""
+    # Setup - NSString marker but not enough bytes for header
+    body = b"NSString\x01\x00"
 
-        # Check results
-        assert type(result) in (str, type(None))
+    # Run function
+    result = extract_body_from_attributed(body)
+
+    # Check results
+    assert result is None
+
+
+def test_extract_body_random_binary_does_not_crash():
+    """Test that random binary data doesn't raise exceptions."""
+    # Setup
+    random_data = os.urandom(1024)
+
+    # Run function - should not raise
+    result = extract_body_from_attributed(random_data)
+
+    # Check results
+    assert type(result) in {str, type(None)}
 
 
 # Tests for the escape_applescript helper.
 
 
 def test_none_returns_empty():
-    assert escape_applescript(None) == ""
+    assert not escape_applescript(None)
 
 
 def test_plain_string_unchanged():
@@ -1074,7 +1051,7 @@ def test_national_input_finds_same_handle_under_configured_region(
 def test_falls_back_to_canonical_scan_when_indexed_lookup_finds_nothing(
     mock_query_db,
 ):
-    """When the WHERE id IN (...) lookup misses, a full-table canonical scan still matches."""
+    """A full-table scan still matches when the indexed lookup misses."""
     mock_query_db.side_effect = [
         [],  # indexed lookup on the predicted variant spellings: no match
         [
@@ -1194,7 +1171,7 @@ def test_get_contact_name_resolves_short_code_handle(
     mock_query_db,
     mock_contacts,
 ):
-    """get_contact_name resolves a handle stored as a short code, through lookup_keys."""
+    """Resolve a handle stored as a short code, through lookup_keys."""
     mock_query_db.return_value = [{"id": "55501"}]
     mock_contacts.return_value = {"55501": "Hugo Example"}
 
@@ -1211,11 +1188,11 @@ def test_get_contact_name_resolves_short_code_handle(
 # caches, so the documented contact:N flow could never resolve.
 
 
-def setUp():
+def setup_function():
     set_recent_contact_matches([])
 
 
-def tearDown():
+def teardown_function():
     set_recent_contact_matches([])
 
 
@@ -1268,7 +1245,7 @@ def test_find_chat_by_display_name_exact_match(mock_query):
         },
     ]
     row = _find_chat_by_display_name("poke")
-    assert row is not None
+    assert isinstance(row, dict)
     assert row["ROWID"] == 2264
     sql, params = mock_query.call_args[0]
     assert "display_name" in sql
@@ -1309,12 +1286,7 @@ def test_replacement_chars_detected():
 @patch("mac_messages_mcp.messages.get_chat_mapping", return_value={})
 @patch("mac_messages_mcp.messages.get_contact_name", return_value="Poke")
 @patch("mac_messages_mcp.messages.query_messages_db")
-def test_recent_renders_attachment_placeholder(
-    mock_query,
-    _name,
-    _mapping,
-    _atts,
-):
+def test_recent_renders_attachment_placeholder(mock_query, *_):
     mock_query.return_value = [
         {
             "ROWID": 1,

@@ -1,3 +1,4 @@
+# Copyright (c) 2023 Carter Lasalle
 """MCP output boundary for Messages/Contacts-derived text.
 
 Third-party iMessage/SMS/Contacts content is treated as untrusted at a single
@@ -77,7 +78,7 @@ def _escape_untrusted_char(ch: str) -> str:
         return ch
 
     category = unicodedata.category(ch)
-    if category in ("Zl", "Zp") or codepoint == 0x85:
+    if category in {"Zl", "Zp"} or codepoint == 0x85:
         return "\\n"
 
     # Unicode tags (language tag + tag characters).
@@ -92,19 +93,19 @@ def _escape_untrusted_char(ch: str) -> str:
     if 0x202A <= codepoint <= 0x202E or 0x2066 <= codepoint <= 0x2069:
         return _unicode_escape(codepoint)
 
-    if category in ("Cf", "Cc", "Cs") or codepoint < 32 or codepoint == 127:
+    if category in {"Cf", "Cc", "Cs"} or codepoint < 32 or codepoint == 127:
         return _unicode_escape(codepoint)
 
     return ch
 
 
 def neutralize_untrusted_text(text: Any, max_chars: int = 0) -> str:
-    """Serialize untrusted text for a single logical line.
+    r"""Serialize untrusted text for a single logical line.
 
-    Embedded newlines/CRs become the two-character sequence ``\\n``. Other
+    Embedded newlines/CRs become the two-character sequence ``\n``. Other
     ASCII controls, Unicode format characters (except ZWJ), bidi overrides,
-    Variation Selectors Supplement, and Unicode tags become ``\\uXXXX`` /
-    ``\\UXXXXXXXX`` escapes. Real emoji, including ZWJ sequences, stay intact.
+    Variation Selectors Supplement, and Unicode tags become ``\uXXXX`` /
+    ``\UXXXXXXXX`` escapes. Real emoji, including ZWJ sequences, stay intact.
     """
     if text is None:
         return ""
@@ -112,7 +113,7 @@ def neutralize_untrusted_text(text: Any, max_chars: int = 0) -> str:
     normalized = str(text).replace("\r\n", "\n").replace("\r", "\n")
     cleaned = "".join(_escape_untrusted_char(ch) for ch in normalized)
 
-    if max_chars > 0 and len(cleaned) > max_chars:
+    if 0 < max_chars < len(cleaned):
         omitted = len(cleaned) - max_chars
         return f"{cleaned[:max_chars].rstrip()}... [truncated {omitted} chars]"
     return cleaned
@@ -143,6 +144,8 @@ class _PresentedUntrusted(str):
     *looks* fenced is a plain ``str`` and is fully re-serialized.
     """
 
+    __slots__: tuple[str, ...] = ()
+
 
 def _is_mcp_image(value: Any) -> bool:
     return isinstance(value, Image)
@@ -156,7 +159,7 @@ def _truncate_output(text: str, max_chars: int = _MAX_UNTRUSTED_OUTPUT_CHARS) ->
 
 
 def _present_text(text: str) -> _PresentedUntrusted:
-    original = text if isinstance(text, str) else str(text)
+    original = text
     serialized = neutralize_untrusted_text(original)
     serialized = _defang_fence_tokens(serialized)
     if _visible_ratio(original) < _LOW_VISIBLE_RATIO:
@@ -166,7 +169,7 @@ def _present_text(text: str) -> _PresentedUntrusted:
 
 
 def present_untrusted_output(value: Any) -> Any:
-    """The MCP security boundary for Messages/Contacts-derived output.
+    """Present Messages/Contacts-derived output through the MCP security boundary.
 
     Strings are neutralized, fence-defanged, length-capped, and wrapped in
     ``<untrusted-mcp-output>``. Lists, tuples, and dicts are walked so FastMCP
@@ -193,7 +196,7 @@ def present_untrusted_output(value: Any) -> Any:
 
 
 def bound_untrusted_output(fn: _F) -> _F:
-    """Decorator that applies ``present_untrusted_output`` to a function result."""
+    """Decorate a function so its result passes through ``present_untrusted_output``."""
 
     @functools.wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> Any:

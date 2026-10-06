@@ -1,4 +1,5 @@
-"""Tests for the phone module"""
+# Copyright (c) 2023 Carter Lasalle
+"""Tests for the phone module."""
 
 import os
 from contextlib import contextmanager
@@ -20,7 +21,7 @@ from mac_messages_mcp.phone import (
 
 
 @contextmanager
-def region_pinned(region=None, clear_locale_env=False):
+def region_pinned(region=None, *, clear_locale_env=False):
     """Temporarily control the environment get_default_region() reads.
 
     get_default_region is @lru_cache'd, so changing the environment alone is
@@ -37,7 +38,7 @@ def region_pinned(region=None, clear_locale_env=False):
             _macos_locale).
 
     """
-    env_backup = dict(os.environ)
+    env_backup = os.environ.copy()
     try:
         if clear_locale_env:
             for key in (REGION_ENV_VAR, "LC_ALL", "LC_CTYPE", "LANG"):
@@ -249,23 +250,29 @@ def test_short_code_matches_itself():
 
 def test_env_override_wins_over_locale():
     """MAC_MESSAGES_REGION wins even when the locale would resolve elsewhere."""
-    with patch("mac_messages_mcp.phone._macos_locale", return_value="en_US"):
-        with region_pinned("FR"):
-            assert get_default_region() == "FR"
+    with (
+        patch("mac_messages_mcp.phone._macos_locale", return_value="en_US"),
+        region_pinned("FR"),
+    ):
+        assert get_default_region() == "FR"
 
 
 def test_unsupported_env_value_is_ignored():
     """A garbage MAC_MESSAGES_REGION value is ignored, falling through."""
-    with patch("mac_messages_mcp.phone._macos_locale", return_value="fr_FR"):
-        with region_pinned("NOTAREGION"):
-            assert get_default_region() == "FR"
+    with (
+        patch("mac_messages_mcp.phone._macos_locale", return_value="fr_FR"),
+        region_pinned("NOTAREGION"),
+    ):
+        assert get_default_region() == "FR"
 
 
 def test_falls_back_to_us_when_nothing_resolves():
     """With no env override and no usable locale, the region falls back to US."""
-    with patch("mac_messages_mcp.phone._macos_locale", return_value=None):
-        with region_pinned(clear_locale_env=True):
-            assert get_default_region() == FALLBACK_REGION
+    with (
+        patch("mac_messages_mcp.phone._macos_locale", return_value=None),
+        region_pinned(clear_locale_env=True),
+    ):
+        assert get_default_region() == FALLBACK_REGION
 
 
 # Tests for _region_from_locale's parsing of locale identifiers.
@@ -327,7 +334,7 @@ def test_regional_override_among_other_keywords():
 
 
 def test_unsupported_regional_override_falls_back_to_base_locale():
-    """An override naming a region phonenumbers ignores leaves the base locale in charge."""
+    """An rg override naming a region phonenumbers ignores falls back to base."""
     assert _region_from_locale("fr_FR@rg=zzzzzz") == "FR"
 
 
@@ -351,12 +358,12 @@ def test_strips_separators():
 
 def test_empty_input():
     """An empty string yields an empty string."""
-    assert digits_only("") == ""
+    assert not digits_only("")
 
 
 def test_none_input():
     """A None input yields an empty string."""
-    assert digits_only(None) == ""
+    assert not digits_only(None)
 
 
 # Tests for is_email_handle.
