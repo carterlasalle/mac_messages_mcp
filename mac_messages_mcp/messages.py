@@ -56,7 +56,7 @@ def run_applescript(script: str, timeout: float = _APPLESCRIPT_TIMEOUT_SECONDS) 
     return out.decode("utf-8").strip()
 
 
-def escape_applescript(value: str) -> str:
+def escape_applescript(value: str | None) -> str:
     """Escape a string for safe interpolation into an AppleScript double-quoted string.
 
     Escapes backslashes first (so subsequent escapes aren't double-escaped), then
