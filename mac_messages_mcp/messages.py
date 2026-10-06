@@ -226,7 +226,11 @@ def _is_attachment_placeholder_body(body: str | None) -> bool:
 
 def get_messages_db_path() -> str:
     """Get the path to the Messages database."""
-    return str(Path("~").expanduser() / "Library/Messages/chat.db")
+    # Resolve through os.path.expanduser rather than Path("~").expanduser():
+    # pathlib only routes bare "~" through os.path from 3.12 on; on 3.10/3.11
+    # it reads $HOME itself, so the documented expanduser seam (and any HOME
+    # override hook) has no effect.
+    return str(Path(os.path.expanduser("~")) / "Library/Messages/chat.db")
 
 
 def query_messages_db(query: str, params: tuple = ()) -> list[dict[str, Any]]:
