@@ -11,6 +11,7 @@ import sqlite3
 import subprocess
 import tempfile
 import time
+from collections.abc import Sequence
 from contextlib import suppress
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -225,7 +226,11 @@ def _is_attachment_placeholder_body(body: str | None) -> bool:
 
 def get_messages_db_path() -> str:
     """Get the path to the Messages database."""
-    return str(Path("~").expanduser() / "Library/Messages/chat.db")
+    # Resolve through os.path.expanduser rather than Path("~").expanduser():
+    # pathlib only routes bare "~" through os.path from 3.12 on; on 3.10/3.11
+    # it reads $HOME itself, so the documented expanduser seam (and any HOME
+    # override hook) has no effect.
+    return str(Path(os.path.expanduser("~")) / "Library/Messages/chat.db")
 
 
 def query_messages_db(query: str, params: tuple = ()) -> list[dict[str, Any]]:
@@ -328,6 +333,102 @@ def _strip_emoji(text: str) -> str:
 
 
 _MAX_MESSAGE_BODY_CHARS = 4_000
+
+# Upper bound for one paginated read. Bounds how much an agent can pull into
+# context in a single call; callers page further back with `offset`.
+_MAX_MESSAGE_LIMIT = 1_000
+
+# Apple's `message.associated_message_type` codes -> tapback names. The 2000
+# range adds a reaction to the referenced message; the 3000 range removes one.
+_TAPBACK_LABELS: dict[int, str] = {
+    2000: "loved",
+    2001: "liked",
+    2002: "disliked",
+    2003: "laughed",
+    2004: "emphasized",
+    2005: "questioned",
+    3000: "removed loved",
+    3001: "removed liked",
+    3002: "removed disliked",
+    3003: "removed laughed",
+    3004: "removed emphasized",
+    3005: "removed questioned",
+}
+
+
+def _parse_iso_date(value: str) -> datetime | None:
+    """Parse an inclusive "YYYY-MM-DD" UTC day, or return None."""
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _date_range_clauses(
+    start_date: str | None,
+    end_date: str | None,
+) -> tuple[list[str], list[str], str | None]:
+    """Build Apple-ns date-range SQL clauses for a message query.
+
+    Returns ``(clauses, params, error)``. Both bounds are inclusive UTC days
+    written "YYYY-MM-DD"; the end bound is exclusive at the following midnight.
+    Timestamps are string-bound so a seconds-format row cannot overflow SQLite's
+    integer comparison.
+    """
+    clauses: list[str] = []
+    params: list[str] = []
+    if start_date:
+        parsed = _parse_iso_date(start_date)
+        if parsed is None:
+            return (
+                [],
+                [],
+                f"Error: start_date must be YYYY-MM-DD, got '{start_date}'.",
+            )
+        clauses.append("CAST(m.date AS TEXT) >= ?")
+        params.append(str(_to_apple_ns(parsed)))
+    if end_date:
+        parsed = _parse_iso_date(end_date)
+        if parsed is None:
+            return (
+                [],
+                [],
+                f"Error: end_date must be YYYY-MM-DD, got '{end_date}'.",
+            )
+        clauses.append("CAST(m.date AS TEXT) < ?")
+        params.append(str(_to_apple_ns(parsed + timedelta(days=1))))
+    return clauses, params, None
+
+
+def _message_metadata_tags(row: dict[str, Any]) -> str:
+    """Compact per-message annotations: service, read state, tapback, reply.
+
+    Only keys present in ``row`` are rendered, so a row from an older chat.db
+    schema (or a fixture that predates these columns) renders exactly as it did
+    before: no tag, no change.
+    """
+    tags: list[str] = []
+    service = row.get("service")
+    if service:
+        tags.append(neutralize_untrusted_text(str(service)))
+    if row.get("is_from_me"):
+        if row.get("is_sent") and row.get("is_delivered") is not None:
+            if not row.get("is_delivered"):
+                tags.append("not delivered")
+    elif row.get("is_read") is not None and not row.get("is_read"):
+        tags.append("unread")
+    associated = row.get("associated_message_type")
+    if associated:
+        try:
+            label = _TAPBACK_LABELS.get(int(associated), f"reaction {associated}")
+        except (TypeError, ValueError):
+            label = f"reaction {associated}"
+        tags.append(f"tapback: {neutralize_untrusted_text(label)}")
+    if row.get("thread_originator_guid"):
+        tags.append("reply")
+    if not tags:
+        return ""
+    return " [" + "] [".join(tags) + "]"
 
 
 def _clean_text(text: str, *, strip_punctuation: bool = False) -> str:
@@ -742,7 +843,13 @@ def get_recent_contact_matches() -> list[dict[str, Any]]:
     return _recent_contact_matches
 
 
-def send_message(recipient: str, message: str, *, group_chat: bool = False) -> str:
+def send_message(
+    recipient: str,
+    message: str,
+    *,
+    group_chat: bool = False,
+    attachment_paths: Sequence[str] | None = None,
+) -> str:
     """Send a message using the Messages app with improved contact resolution.
 
     Args:
@@ -750,8 +857,10 @@ def send_message(recipient: str, message: str, *, group_chat: bool = False) -> s
             contact selection. Use "contact:N" to select the Nth contact from a
             previous ambiguous match. For group chats, use the chat ID from
             tool_get_chats (e.g., "chat123456789").
-        message: Message text to send
+        message: Message text to send. May be empty when attachments are given.
         group_chat: Whether this is a group chat (uses chat ID instead of buddy)
+        attachment_paths: Local files to send as attachments. Refused for group
+            chats; a file transfer has no SMS/RCS fallback.
 
     Returns:
         Success or error message
@@ -760,10 +869,28 @@ def send_message(recipient: str, message: str, *, group_chat: bool = False) -> s
     # Convert to string to ensure phone numbers work properly
     recipient = str(recipient).strip()
 
+    resolved_attachments, attachment_error = _prepare_attachment_paths(
+        attachment_paths,
+    )
+    if attachment_error is not None:
+        return attachment_error
+    if not message.strip() and not resolved_attachments:
+        return "Error: provide message text or at least one attachment."
+    if group_chat and resolved_attachments:
+        return (
+            "Error: attachments can only be sent to an individual recipient; "
+            "Messages automation cannot attach files to a group chat."
+        )
+
     # For group chats, skip contact lookup and use the chat ID directly
     if group_chat:
         # Use the recipient directly as the chat ID
-        return _send_message_to_recipient(recipient, message, group_chat=True)
+        return _send_message_to_recipient(
+            recipient,
+            message,
+            group_chat=True,
+            attachment_paths=resolved_attachments,
+        )
 
     # Handle contact selection format (contact:N)
     if recipient.lower().startswith("contact:"):
@@ -793,6 +920,7 @@ def send_message(recipient: str, message: str, *, group_chat: bool = False) -> s
                 message,
                 contact["name"],
                 group_chat=False,
+                attachment_paths=resolved_attachments,
             )
         except (ValueError, IndexError) as e:
             return f"Error selecting contact: {e!s}"
@@ -807,11 +935,21 @@ def send_message(recipient: str, message: str, *, group_chat: bool = False) -> s
                 "+14155551234, or set MAC_MESSAGES_REGION if your national "
                 "numbers belong to another region."
             )
-        return _send_message_to_recipient(formatted_number, message, group_chat=False)
+        return _send_message_to_recipient(
+            formatted_number,
+            message,
+            group_chat=False,
+            attachment_paths=resolved_attachments,
+        )
 
     # Check if recipient is an email address
     if "@" in recipient:
-        return _send_message_to_recipient(recipient, message, group_chat=False)
+        return _send_message_to_recipient(
+            recipient,
+            message,
+            group_chat=False,
+            attachment_paths=resolved_attachments,
+        )
 
     # Try to find the contact by name
     contacts = find_contact_by_name(recipient)
@@ -827,6 +965,7 @@ def send_message(recipient: str, message: str, *, group_chat: bool = False) -> s
             message,
             contact["name"],
             group_chat=False,
+            attachment_paths=resolved_attachments,
         )
     # Store the matches for later selection (shared contact:N store)
     set_recent_contact_matches(contacts)
@@ -843,6 +982,57 @@ def send_message(recipient: str, message: str, *, group_chat: bool = False) -> s
         f"Multiple contacts found matching "
         f"'{neutralize_untrusted_text(recipient)}'. Please specify which one "
         f"using 'contact:N' where N is the number:\n{contact_list}"
+    )
+
+
+def create_contact(name: str, phone: str, *, label: str = "mobile") -> str:
+    """Create one Contacts.app entry holding a single phone number.
+
+    This writes through Contacts.app automation, not the read-only AddressBook
+    SQLite path, so it needs Automation permission for Contacts and is a
+    privileged side effect the MCP client must gate like a send. It never merges
+    with an existing card: calling it twice for the same person creates two
+    entries.
+    """
+    name = str(name).strip()
+    if not name:
+        return "Error: name cannot be empty."
+    phone = str(phone).strip()
+    if not phone:
+        return "Error: phone cannot be empty."
+
+    dialable = to_dialable_e164(phone)
+    stored_phone = dialable or phone
+    parts = name.split()
+    safe_first = escape_applescript(parts[0])
+    safe_last = escape_applescript(" ".join(parts[1:]))
+    safe_label = escape_applescript(str(label or "mobile"))
+    safe_phone = escape_applescript(stored_phone)
+
+    # The Contacts record literal needs doubled braces inside the f-string.
+    script = f"""
+    tell application "Contacts"
+        set newPerson to make new person with properties {{first name:"{safe_first}", last name:"{safe_last}"}}
+        make new phone at end of phones of newPerson with properties {{label:"{safe_label}", value:"{safe_phone}"}}
+        save
+        return "success"
+    end tell
+    """
+
+    try:
+        result = run_applescript(script)
+    except (OSError, subprocess.SubprocessError) as e:
+        return f"Error creating contact: {e!s}"
+
+    if result.startswith("Error:"):
+        return f"Error creating contact: {result[6:].strip()}"
+    if result.strip() != "success":
+        return f"Unknown Contacts result: {result}"
+
+    return (
+        f"Created contact {neutralize_untrusted_text(name)} with "
+        f"{neutralize_untrusted_text(str(label or 'mobile'))} number "
+        f"{neutralize_untrusted_text(stored_phone)}"
     )
 
 
@@ -1052,12 +1242,52 @@ def _send_via_temp_file(
     )
 
 
+def _prepare_attachment_paths(
+    attachment_paths: Sequence[str] | None,
+) -> tuple[list[str], str | None]:
+    """Validate and resolve local files to send as attachments.
+
+    Returns ``(paths, error)``. Every path is checked before the first byte is
+    sent, so an invalid path cannot leave a partially-delivered message behind.
+    """
+    if not attachment_paths:
+        return [], None
+    resolved: list[str] = []
+    for raw in attachment_paths:
+        path = Path(str(raw)).expanduser()
+        try:
+            resolved_path = path.resolve(strict=True)
+        except OSError:
+            return [], f"Error: attachment not found: {raw}"
+        if not resolved_path.is_file():
+            return [], f"Error: attachment is not a regular file: {raw}"
+        resolved.append(str(resolved_path))
+    return resolved, None
+
+
+def _send_attachment_file(recipient: str, file_path: str) -> str:
+    """Hand one local file to Messages.app over iMessage.
+
+    A file transfer has no SMS/RCS path, so this never falls back: an
+    unreachable iMessage recipient fails rather than silently dropping the file.
+    """
+    safe_recipient = escape_applescript(recipient)
+    safe_path = escape_applescript(file_path)
+    command = (
+        'tell application "Messages" to send (POSIX file '
+        f'"{safe_path}") to participant "{safe_recipient}" of '
+        "(1st service whose service type = iMessage)"
+    )
+    return run_applescript(command)
+
+
 def _send_message_to_recipient(
     recipient: str,
     message: str,
     contact_name: str | None = None,
     *,
     group_chat: bool = False,
+    attachment_paths: Sequence[str] = (),
 ) -> str:
     """Send a message to a specific recipient using a file-based approach.
 
@@ -1066,15 +1296,41 @@ def _send_message_to_recipient(
         message: Message text to send
         contact_name: Optional contact name for the success message
         group_chat: Whether this is a group chat
+        attachment_paths: Resolved local files to send first (direct
+            recipients only).
 
     Returns:
         Success or error message
 
     """
+    if group_chat and attachment_paths:
+        return (
+            "Error: attachments can only be sent to an individual recipient; "
+            "Messages automation cannot attach files to a group chat."
+        )
+
+    attachment_notes: list[str] = []
+    for path in attachment_paths:
+        result = _send_attachment_file(recipient, path)
+        label = neutralize_untrusted_text(Path(path).name)
+        if result.startswith("Error:"):
+            attachment_notes.append(f"{label} failed ({result[6:].strip()})")
+        else:
+            attachment_notes.append(f"{label} sent")
+
+    if not message.strip():
+        target = neutralize_untrusted_text(contact_name or recipient)
+        if not attachment_notes:
+            return "Error: provide message text or at least one attachment."
+        return (
+            f"Sent {len(attachment_notes)} attachment(s) via iMessage to "
+            f"{target}: " + "; ".join(attachment_notes)
+        )
+
     file_path: str | None = None
     try:
         file_path = _write_message_file(message)
-        return _send_via_temp_file(
+        result = _send_via_temp_file(
             recipient,
             message,
             file_path,
@@ -1083,7 +1339,7 @@ def _send_message_to_recipient(
         )
     except (OSError, sqlite3.Error, subprocess.SubprocessError):
         # Try fallback method
-        return _send_message_direct(
+        result = _send_message_direct(
             recipient,
             message,
             contact_name,
@@ -1094,6 +1350,10 @@ def _send_message_to_recipient(
         if file_path:
             with suppress(OSError):
                 Path(file_path).unlink()
+
+    if attachment_notes:
+        result += " Attachments: " + "; ".join(attachment_notes)
+    return result
 
 
 def get_contact_name(handle_id: int | None) -> str:
@@ -1226,52 +1486,47 @@ def _check_selection_index(index: int) -> str | None:
     return None
 
 
-@bound_untrusted_output
-def get_recent_messages(
-    hours: int = 24,
-    contact: str | None = None,
-    chat_id: str | None = None,
-) -> str:
-    """Get recent messages from the Messages app using attributedBody for content.
+def _resolve_message_scope(
+    contact: str | None,
+    chat_id: str | None,
+) -> tuple[list[int] | None, int | None, str | None, bool, str | None]:
+    """Resolve an optional contact/chat filter into message-table scope.
 
-    Args:
-        hours: Number of hours to look back (default: 24)
-        contact: Filter by contact name, phone number, or email (optional)
-                Use "contact:N" to select a specific contact from previous matches
-        chat_id: Filter by group chat identifier from tool_get_chats (optional)
-
-    Returns:
-        Formatted string with recent messages
-
+    Returns ``(handle_ids, chat_row_id, chat_display_name, chat_is_group,
+    error)``. ``error`` is a user-facing message when the filter cannot be
+    resolved; otherwise at most one of the first two entries is populated.
+    Shared by the recent-message read and the fuzzy search so both accept the
+    same filters, including the ``contact:N`` selector.
     """
-    # Input validation
-    if hours < 0:
-        return "Error: Hours cannot be negative. Please provide a positive number."
-
-    # Prevent integer overflow - limit to reasonable maximum (10 years)
-    max_hours = 10 * 365 * 24  # 87,600 hours
-    if hours > max_hours:
-        return (
-            "Error: Hours value too large. Maximum allowed is "
-            f"{max_hours} hours (10 years)."
-        )
     if contact and chat_id:
-        return "Error: Provide either contact or chat_id, not both."
+        return (
+            None,
+            None,
+            None,
+            False,
+            "Error: Provide either contact or chat_id, not both.",
+        )
 
-    handle_ids = None
-    chat_row_id = None
-    chat_display_name = None
+    handle_ids: list[int] | None = None
+    chat_row_id: int | None = None
+    chat_display_name: str | None = None
     chat_is_group = False
 
     if chat_id:
         chat_id = str(chat_id).strip()
         if not chat_id:
-            return "Error: chat_id cannot be empty."
+            return None, None, None, False, "Error: chat_id cannot be empty."
         chat = _find_chat_by_identifier(chat_id)
         if not chat:
             return (
-                f"No group chat found with chat_id '{chat_id}'. "
-                "Use tool_get_chats to list available group chats."
+                None,
+                None,
+                None,
+                False,
+                (
+                    f"No group chat found with chat_id '{chat_id}'. "
+                    "Use tool_get_chats to list available group chats."
+                ),
             )
         chat_row_id = chat["ROWID"]
         chat_display_name = chat.get("display_name") or chat_id
@@ -1290,8 +1545,14 @@ def get_recent_messages(
             contact_parts = contact.split(":", 1)
             if len(contact_parts) < 2 or not contact_parts[1].strip():
                 return (
-                    "Error: Invalid contact selection format. Use 'contact:N' "
-                    "where N is a positive number."
+                    None,
+                    None,
+                    None,
+                    False,
+                    (
+                        "Error: Invalid contact selection format. Use 'contact:N' "
+                        "where N is a positive number."
+                    ),
                 )
 
             # Get the selected index (1-based)
@@ -1299,25 +1560,43 @@ def get_recent_messages(
                 index = int(contact_parts[1].strip()) - 1
             except ValueError:
                 return (
-                    "Error: Contact selection must be a number. Use 'contact:N' "
-                    "where N is a positive number."
+                    None,
+                    None,
+                    None,
+                    False,
+                    (
+                        "Error: Contact selection must be a number. Use 'contact:N' "
+                        "where N is a positive number."
+                    ),
                 )
 
             selection_error = _check_selection_index(index)
             if selection_error is not None:
-                return selection_error
+                return None, None, None, False, selection_error
 
             recent_matches = get_recent_contact_matches()
             if not recent_matches:
                 return (
-                    "No recent contact matches available. Please search for a "
-                    "contact first."
+                    None,
+                    None,
+                    None,
+                    False,
+                    (
+                        "No recent contact matches available. Please search for a "
+                        "contact first."
+                    ),
                 )
 
             if index >= len(recent_matches):
                 return (
-                    "Invalid selection. Please choose a number between 1 and "
-                    f"{len(recent_matches)}."
+                    None,
+                    None,
+                    None,
+                    False,
+                    (
+                        "Invalid selection. Please choose a number between 1 and "
+                        f"{len(recent_matches)}."
+                    ),
                 )
 
             # Get the selected contact's phone number
@@ -1356,11 +1635,23 @@ def get_recent_messages(
                     ],
                 )
                 return (
-                    f"Multiple chats found matching '{contact}'. Please specify "
-                    f"which one using 'chat_id' from tool_get_chats:\n{chat_list}"
+                    None,
+                    None,
+                    None,
+                    False,
+                    (
+                        f"Multiple chats found matching '{contact}'. Please specify "
+                        f"which one using 'chat_id' from tool_get_chats:\n{chat_list}"
+                    ),
                 )
             elif not matches:
-                return f"No contacts found matching '{contact}'."
+                return (
+                    None,
+                    None,
+                    None,
+                    False,
+                    f"No contacts found matching '{contact}'.",
+                )
             elif len(matches) == 1:
                 # Single match, use its phone number
                 contact = str(matches[0]["phone"])
@@ -1376,9 +1667,15 @@ def get_recent_messages(
                     ],
                 )
                 return (
-                    f"Multiple contacts found matching '{contact}'. Please specify "
-                    "which one using 'contact:N' where N is the "
-                    f"number:\n{contact_list}"
+                    None,
+                    None,
+                    None,
+                    False,
+                    (
+                        f"Multiple contacts found matching '{contact}'. Please "
+                        "specify which one using 'contact:N' where N is the "
+                        f"number:\n{contact_list}"
+                    ),
                 )
 
         # At this point, contact should be a phone number or email, unless the
@@ -1418,20 +1715,139 @@ def get_recent_messages(
                     and results[0].get("count", 0) == 0
                 ):
                     # No messages found but the query was valid
-                    return f"No message history found with '{contact}'."
+                    return (
+                        None,
+                        None,
+                        None,
+                        False,
+                        f"No message history found with '{contact}'.",
+                    )
                 # Could not find the handle at all
                 return (
-                    f"Could not find any messages with contact '{contact}'. "
-                    "Verify the phone number or email is correct."
+                    None,
+                    None,
+                    None,
+                    False,
+                    (
+                        f"Could not find any messages with contact '{contact}'. "
+                        "Verify the phone number or email is correct."
+                    ),
                 )
 
-    # Calculate the timestamp for X hours ago
-    hours_ago = datetime.now(timezone.utc) - timedelta(hours=hours)
-    # String-bind the Apple-ns timestamp to avoid SQLite integer overflow.
-    timestamp_str = str(_to_apple_ns(hours_ago))
+    return handle_ids, chat_row_id, chat_display_name, chat_is_group, None
 
-    # Build the SQL query - use attributedBody field and text
-    query = """
+
+@bound_untrusted_output
+def get_recent_messages(
+    hours: int = 24,
+    contact: str | None = None,
+    chat_id: str | None = None,
+    *,
+    limit: int = 100,
+    offset: int = 0,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    unread_only: bool = False,
+    since_rowid: int | None = None,
+) -> str:
+    """Get recent messages from the Messages app using attributedBody for content.
+
+    Args:
+        hours: Number of hours to look back (default: 24). Ignored when
+            ``start_date`` or ``end_date`` is given.
+        contact: Filter by contact name, phone number, or email (optional)
+                Use "contact:N" to select a specific contact from previous matches
+        chat_id: Filter by group chat identifier from tool_get_chats (optional)
+        limit: Maximum number of messages to return (default: 100, max 1000).
+        offset: Number of newest messages to skip, for paging older history.
+        start_date: Inclusive ISO date "YYYY-MM-DD" (UTC). Optional.
+        end_date: Inclusive ISO date "YYYY-MM-DD" (UTC). Optional.
+        unread_only: Return only inbound messages still marked unread.
+        since_rowid: Return only messages newer than this message ROWID, in
+            ascending order — the cursor form used for incremental reads.
+
+    Returns:
+        Formatted string with recent messages
+
+    """
+    # Input validation
+    if hours < 0:
+        return "Error: Hours cannot be negative. Please provide a positive number."
+
+    # Prevent integer overflow - limit to reasonable maximum (10 years)
+    max_hours = 10 * 365 * 24  # 87,600 hours
+    if hours > max_hours:
+        return (
+            "Error: Hours value too large. Maximum allowed is "
+            f"{max_hours} hours (10 years)."
+        )
+    if limit <= 0:
+        return "Error: limit must be positive."
+    if limit > _MAX_MESSAGE_LIMIT:
+        return f"Error: limit must be at most {_MAX_MESSAGE_LIMIT}."
+    if offset < 0:
+        return "Error: offset cannot be negative."
+    if since_rowid is not None and since_rowid < 0:
+        return "Error: since_rowid cannot be negative."
+    handle_ids, chat_row_id, chat_display_name, chat_is_group, scope_error = (
+        _resolve_message_scope(contact, chat_id)
+    )
+    if scope_error is not None:
+        return scope_error
+
+    # Time window: explicit dates win over the rolling `hours` window.
+    window_clauses, window_params, date_error = _date_range_clauses(
+        start_date,
+        end_date,
+    )
+    if date_error is not None:
+        return date_error
+    if window_clauses:
+        where_clauses = list(window_clauses)
+        params: list[Any] = [*window_params]
+    elif since_rowid is not None:
+        # A cursor read means "everything after this row", independent of the
+        # rolling hours window.
+        where_clauses = []
+        params = []
+    else:
+        # Calculate the timestamp for X hours ago.
+        # String-bind the Apple-ns timestamp to avoid SQLite integer overflow.
+        hours_ago = datetime.now(timezone.utc) - timedelta(hours=hours)
+        where_clauses = ["CAST(m.date AS TEXT) > ?"]
+        params = [str(_to_apple_ns(hours_ago))]
+
+    # Add contact filter if handle_ids were found (support multiple handles
+    # for multi-protocol)
+    if handle_ids:
+        placeholders = ", ".join(["?" for _ in handle_ids])
+        where_clauses.append(f"m.handle_id IN ({placeholders})")
+        params.extend(handle_ids)
+
+    if chat_row_id is not None:
+        where_clauses.append(
+            "m.ROWID IN (SELECT message_id FROM chat_message_join "
+            "WHERE chat_id = ?)",
+        )
+        params.append(chat_row_id)
+
+    if unread_only:
+        where_clauses.append("m.is_from_me = 0 AND m.is_read = 0")
+
+    if since_rowid is not None:
+        where_clauses.append("m.ROWID > ?")
+        params.append(since_rowid)
+
+    # A cursor read streams forward in time; the default read shows the newest
+    # messages first.
+    order = "ASC" if since_rowid is not None else "DESC"
+    where_sql = " AND ".join(where_clauses)
+
+    # Build the SQL query - use attributedBody field and text. The metadata
+    # columns (service, read/delivery flags, tapback, reply) are rendered only
+    # when the row carries them, so an older chat.db schema degrades to the
+    # original line format rather than failing.
+    query = f"""
     SELECT
         m.ROWID,
         m.date,
@@ -1439,36 +1855,29 @@ def get_recent_messages(
         m.attributedBody,
         m.is_from_me,
         m.handle_id,
-        m.cache_roomnames
+        m.cache_roomnames,
+        m.service,
+        m.is_read,
+        m.is_sent,
+        m.is_delivered,
+        m.associated_message_type,
+        m.thread_originator_guid
     FROM
         message m
     WHERE
-        CAST(m.date AS TEXT) > ?
+        {where_sql}
+    ORDER BY m.date {order}
+    LIMIT ? OFFSET ?
     """
-
-    params: list[Any] = [timestamp_str]
-
-    # Add contact filter if handle_ids were found (support multiple handles
-    # for multi-protocol)
-    if handle_ids:
-        placeholders = ", ".join(["?" for _ in handle_ids])
-        query += f"AND m.handle_id IN ({placeholders}) "
-        params.extend(handle_ids)
-
-    if chat_row_id is not None:
-        query += (
-            "AND m.ROWID IN (SELECT message_id FROM chat_message_join "
-            "WHERE chat_id = ?) "
-        )
-        params.append(chat_row_id)
-
-    query += "ORDER BY m.date DESC LIMIT 100"
+    params.extend([limit, offset])
 
     # Execute the query
     messages = query_messages_db(query, tuple(params))
 
     # Format the results
     if not messages:
+        if since_rowid is not None:
+            return f"No new messages since ROWID {since_rowid}."
         return "No messages found in the specified time period."
 
     if "error" in messages[0]:
@@ -1487,16 +1896,17 @@ def get_recent_messages(
     formatted_messages: list[str] = []
     for msg in messages:
         # Get the message content from text or attributedBody
-        if msg.get("text"):
-            body = msg["text"]
-        elif msg.get("attributedBody"):
+        body = msg.get("text")
+        if not body and msg.get("attributedBody"):
             body = extract_body_from_attributed(msg["attributedBody"])
-            if not body:
+        if not body:
+            if msg.get("associated_message_type"):
+                # A tapback row carries no body of its own: the reaction is
+                # the content, and the metadata tag below names it.
+                body = "(reaction)"
+            else:
                 # Skip messages with no content
                 continue
-        else:
-            # Skip empty messages
-            continue
         if _is_attachment_placeholder_body(body):
             body = "[attachment]"
 
@@ -1514,6 +1924,7 @@ def get_recent_messages(
             )
 
         direction = "You" if msg["is_from_me"] else get_contact_name(msg["handle_id"])
+        metadata = _message_metadata_tags(msg)
 
         # Check if this is a group chat
         roomnames = msg.get("cache_roomnames")
@@ -1531,13 +1942,168 @@ def get_recent_messages(
         )
         body = _sanitize_message_body(body)
         formatted_messages.append(
-            f"{message_prefix} {direction}: {body}{attachment_summary}",
+            f"{message_prefix} {direction}{metadata}: {body}{attachment_summary}",
         )
 
     if not formatted_messages:
+        if since_rowid is not None:
+            return f"No new messages since ROWID {since_rowid}."
         return "No messages found in the specified time period."
 
+    if len(messages) >= limit:
+        formatted_messages.append(
+            f"(Showing {len(messages)} message(s) from offset {offset}; older "
+            f"messages may exist - call again with offset={offset + limit}.)",
+        )
+
     return "\n".join(formatted_messages)
+
+
+# Chat styles macOS writes into chat.style. Anything else is a 1:1 thread.
+_CONVERSATION_STYLES: dict[int, str] = {43: "group", 45: "business"}
+
+# Upper bound for one tool_wait_for_new_messages call. The MCP stdio transport
+# has no server push, so waiting is a bounded poll; a client that needs a longer
+# horizon calls this tool repeatedly.
+_MAX_WAIT_SECONDS = 300
+_WAIT_BATCH_LIMIT = 50
+
+
+def _conversation_kind(style: Any) -> str:
+    """Map a chat.style value to a human label; unknown styles are direct."""
+    try:
+        return _CONVERSATION_STYLES.get(int(style), "direct")
+    except (TypeError, ValueError):
+        return "direct"
+
+
+@bound_untrusted_output
+def list_conversations(limit: int = 50, unread_only: bool = False) -> str:
+    """List every conversation, most recent activity first.
+
+    Unlike ``get_chat_mapping`` (named group chats only), this covers 1:1,
+    business, and group threads, with message and unread counts, so a client can
+    discover a conversation and then page it with ``get_recent_messages`` or
+    ``fuzzy_search_messages``.
+
+    Args:
+        limit: Maximum number of conversations to return (default 50).
+        unread_only: Return only conversations with at least one unread message.
+
+    """
+    if limit <= 0:
+        return "Error: limit must be positive."
+    if limit > _MAX_MESSAGE_LIMIT:
+        return f"Error: limit must be at most {_MAX_MESSAGE_LIMIT}."
+
+    query = """
+    SELECT
+        c.ROWID AS chat_row_id,
+        c.chat_identifier AS chat_identifier,
+        c.display_name AS display_name,
+        c.style AS style,
+        COUNT(m.ROWID) AS message_count,
+        SUM(CASE WHEN m.is_from_me = 0 AND m.is_read = 0 THEN 1 ELSE 0 END)
+            AS unread_count,
+        MAX(m.date) AS last_message_date
+    FROM chat c
+    LEFT JOIN chat_message_join cmj ON cmj.chat_id = c.ROWID
+    LEFT JOIN message m ON m.ROWID = cmj.message_id
+    GROUP BY c.ROWID, c.chat_identifier, c.display_name, c.style
+    ORDER BY last_message_date IS NULL, last_message_date DESC
+    LIMIT ?
+    """
+    rows = query_messages_db(query, (limit,))
+    if not rows:
+        return "No conversations found."
+    if "error" in rows[0]:
+        return f"Error accessing chats: {rows[0]['error']}"
+
+    lines: list[str] = []
+    for row in rows:
+        if unread_only and not row.get("unread_count"):
+            continue
+        name = row.get("display_name") or row.get("chat_identifier") or "unknown"
+        last = row.get("last_message_date")
+        try:
+            last_str = (
+                _from_apple_ns(int(last)).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+                if last
+                else "no messages"
+            )
+        except (ValueError, TypeError, OverflowError):
+            last_str = "unknown"
+        identifier = neutralize_untrusted_text(str(row.get("chat_identifier") or ""))
+        lines.append(
+            f"{len(lines) + 1}. [{_conversation_kind(row.get('style'))}] "
+            f"{neutralize_untrusted_text(str(name))} (chat ID: {identifier}) - "
+            f"{row.get('message_count') or 0} message(s), "
+            f"{row.get('unread_count') or 0} unread, last {last_str}",
+        )
+
+    if not lines:
+        return "No conversations with unread messages found."
+
+    return f"Found {len(lines)} conversation(s):\n" + "\n".join(lines)
+
+
+@bound_untrusted_output
+def wait_for_new_messages(
+    since_rowid: int = 0,
+    timeout_seconds: float = 30.0,
+    poll_interval: float = 1.0,
+    contact: str | None = None,
+    chat_id: str | None = None,
+) -> str:
+    """Block until a message newer than ``since_rowid`` exists, or time out.
+
+    An MCP stdio server cannot push, so this is a bounded poll: it returns the
+    new messages as soon as any appear, or a timeout notice. Call it in a loop,
+    passing the highest ROWID returned last time as the next ``since_rowid``.
+
+    Args:
+        since_rowid: Cursor; only messages with a greater ROWID are returned.
+        timeout_seconds: How long to wait before giving up (max 300).
+        poll_interval: Seconds between database polls.
+        contact: Optional contact filter, as in ``get_recent_messages``.
+        chat_id: Optional conversation filter, as in ``get_recent_messages``.
+
+    """
+    if since_rowid < 0:
+        return "Error: since_rowid cannot be negative."
+    if timeout_seconds <= 0 or timeout_seconds > _MAX_WAIT_SECONDS:
+        return f"Error: timeout_seconds must be between 0 and {_MAX_WAIT_SECONDS}."
+    if poll_interval <= 0:
+        return "Error: poll_interval must be positive."
+
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        rows = query_messages_db(
+            "SELECT COALESCE(MAX(m.ROWID), 0) AS max_rowid FROM message m "
+            "WHERE m.ROWID > ?",
+            (since_rowid,),
+        )
+        max_rowid = 0
+        if rows and "error" not in rows[0]:
+            try:
+                max_rowid = int(rows[0].get("max_rowid") or 0)
+            except (TypeError, ValueError):
+                max_rowid = 0
+        if max_rowid > since_rowid:
+            return get_recent_messages(
+                since_rowid=since_rowid,
+                contact=contact,
+                chat_id=chat_id,
+                limit=_WAIT_BATCH_LIMIT,
+            )
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return (
+                f"No new messages arrived within {timeout_seconds:g} seconds "
+                f"(cursor ROWID {since_rowid})."
+            )
+        time.sleep(min(poll_interval, remaining))
 
 
 # Maximum number of messages returned by a single fuzzy search query.
@@ -1555,16 +2121,29 @@ def fuzzy_search_messages(
     search_term: str,
     hours: int = 720,
     threshold: float = 0.6,  # Default threshold adjusted for thefuzz
+    *,
+    contact: str | None = None,
+    chat_id: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    limit: int = 100,
 ) -> str:
     """Fuzzy search for messages containing the search_term within the last N hours.
 
     Args:
         search_term: The string to search for in message content.
         hours: Number of hours to look back (default: 720, i.e. 30 days).
-               Use 0 to search all messages with no time limit.
+               Use 0 to search all messages with no time limit. Ignored when
+               ``start_date`` or ``end_date`` is given.
         threshold: Minimum similarity score (0.0-1.0) to consider a match
             (default: 0.6 for WRatio). A lower threshold allows for more
             lenient matching.
+        contact: Restrict the search to one contact, phone number, email, or
+            "contact:N" selector.
+        chat_id: Restrict the search to one conversation from tool_get_chats.
+        start_date: Inclusive ISO date "YYYY-MM-DD" (UTC). Optional.
+        end_date: Inclusive ISO date "YYYY-MM-DD" (UTC). Optional.
+        limit: Maximum number of ranked matches to return (default: 100).
 
     Returns:
         Formatted string with matching messages and scores, or an error
@@ -1587,6 +2166,14 @@ def fuzzy_search_messages(
         )
     if not 0.0 <= threshold <= 1.0:
         return "Error: Threshold must be between 0.0 and 1.0."
+    if limit <= 0:
+        return "Error: limit must be positive."
+
+    handle_ids, chat_row_id, chat_display_name, chat_is_group, scope_error = (
+        _resolve_message_scope(contact, chat_id)
+    )
+    if scope_error is not None:
+        return scope_error
 
     # Build the SQL query — use a LIKE pre-filter on the text column to let
     # SQLite do the heavy lifting for exact substring matches.  Messages
@@ -1599,21 +2186,43 @@ def fuzzy_search_messages(
         "(m.text LIKE ? ESCAPE '\\' OR "
         "(m.text IS NULL AND m.attributedBody IS NOT NULL))"
     )
-    where_clauses = [like_clause]
-    params_list: list[Any] = [like_param]
-
-    if hours == 0:
+    # Time window: explicit dates replace the rolling `hours` window.
+    time_clauses, time_params, date_error = _date_range_clauses(
+        start_date,
+        end_date,
+    )
+    if date_error is not None:
+        return date_error
+    if time_clauses:
+        time_desc = f"{start_date or 'the beginning'} to {end_date or 'now'}"
+    elif hours == 0:
         time_desc = "all time"
     else:
         hours_ago_dt = datetime.now(timezone.utc) - timedelta(hours=hours)
         # String-bind the Apple-ns timestamp to avoid SQLite integer overflow.
-        timestamp_str = str(_to_apple_ns(hours_ago_dt))
-
-        where_clauses.insert(0, "CAST(m.date AS TEXT) > ?")
-        params_list.insert(0, timestamp_str)
+        time_clauses = ["CAST(m.date AS TEXT) > ?"]
+        time_params = [str(_to_apple_ns(hours_ago_dt))]
         time_desc = f"the last {hours} hours"
 
-    params_list.append(_FUZZY_SEARCH_SOFT_CAP)
+    where_clauses = [*time_clauses, like_clause]
+    params_list: list[Any] = [*time_params, like_param]
+
+    if handle_ids:
+        placeholders = ", ".join(["?" for _ in handle_ids])
+        where_clauses.append(f"m.handle_id IN ({placeholders})")
+        params_list.extend(handle_ids)
+
+    if chat_row_id is not None:
+        where_clauses.append(
+            "m.ROWID IN (SELECT message_id FROM chat_message_join "
+            "WHERE chat_id = ?)",
+        )
+        params_list.append(chat_row_id)
+
+    # Ranking happens in Python, so fetch a multiple of the requested page and
+    # keep the existing soft cap as the ceiling on one query's cost.
+    fetch_limit = min(_FUZZY_SEARCH_SOFT_CAP, max(limit * 10, 500))
+    params_list.append(fetch_limit)
     where_sql = " AND ".join(where_clauses)
     query = f"""
     SELECT
@@ -1623,7 +2232,13 @@ def fuzzy_search_messages(
         m.attributedBody,
         m.is_from_me,
         m.handle_id,
-        m.cache_roomnames
+        m.cache_roomnames,
+        m.service,
+        m.is_read,
+        m.is_sent,
+        m.is_delivered,
+        m.associated_message_type,
+        m.thread_originator_guid
     FROM
         message m
     WHERE
@@ -1688,7 +2303,9 @@ def fuzzy_search_messages(
             f"of {threshold} in {time_desc}."
         )
 
-    truncated = len(raw_messages) >= _FUZZY_SEARCH_SOFT_CAP
+    fetch_truncated = len(raw_messages) >= fetch_limit
+    results_truncated = len(matched_messages_with_scores) > limit
+    matched_messages_with_scores = matched_messages_with_scores[:limit]
 
     chat_mapping = get_chat_mapping()
 
@@ -1716,6 +2333,7 @@ def fuzzy_search_messages(
         direction = (
             "You" if msg_dict["is_from_me"] else get_contact_name(msg_dict["handle_id"])
         )
+        metadata = _message_metadata_tags(msg_dict)
         cache_roomnames = msg_dict.get("cache_roomnames")
         group_chat_name = chat_mapping.get(cache_roomnames) if cache_roomnames else None
         message_prefix = f"[{date_str}] (Score: {score:.2f})" + (
@@ -1727,17 +2345,23 @@ def fuzzy_search_messages(
         )
         original_body = _sanitize_message_body(original_body)
         formatted_results.append(
-            f"{message_prefix} {direction}: {original_body}{attachment_summary}",
+            f"{message_prefix} {direction}{metadata}: {original_body}"
+            f"{attachment_summary}",
         )
 
     header = (
         f"Found {len(matched_messages_with_scores)} messages "
         f"matching '{search_term}':\n"
     )
-    if truncated:
+    if fetch_truncated:
         header += (
-            f"(Results capped at {_FUZZY_SEARCH_SOFT_CAP} messages — "
-            "try a shorter time window for more precise results.)\n"
+            f"(Search stopped after {fetch_limit} candidate messages — try a "
+            "shorter time window for more precise results.)\n"
+        )
+    if results_truncated:
+        header += (
+            f"(Showing the {limit} best matches; raise 'limit' or narrow the "
+            "time window for more.)\n"
         )
     return header + "\n".join(formatted_results)
 
