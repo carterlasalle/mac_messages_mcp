@@ -1,13 +1,22 @@
+<div align="center">
+
 # Mac Messages MCP
 
-Use Claude, Codex, Cursor, VS Code, or any local MCP client to search, read, and
-send messages through the macOS Messages app.
+**Read, search, and send macOS Messages from any local MCP client.**
 
 [![PyPI](https://img.shields.io/pypi/v/mac-messages-mcp?logo=pypi&logoColor=white)](https://pypi.org/project/mac-messages-mcp/)
 [![Python](https://img.shields.io/pypi/pyversions/mac-messages-mcp?logo=python&logoColor=white)](https://pypi.org/project/mac-messages-mcp/)
 [![CI](https://github.com/carterlasalle/mac_messages_mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/carterlasalle/mac_messages_mcp/actions/workflows/ci.yml)
 [![Downloads](https://static.pepy.tech/badge/mac-messages-mcp)](https://pepy.tech/project/mac-messages-mcp)
+[![macOS](https://img.shields.io/badge/macOS-only-000000?logo=apple&logoColor=white)](#quick-start)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+[Quick start](#quick-start) · [Available tools](#available-tools) · [Agent skill](#agent-skill) · [Command-line interface](#command-line-interface) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
+
+</div>
+
+Use Claude, Codex, Cursor, VS Code, or any local MCP client to search, read, and
+send messages through the macOS Messages app.
 
 Mac Messages MCP runs locally on your Mac. It opens the Messages and Contacts
 databases read-only, returns only the data a client asks for, and uses
@@ -17,32 +26,41 @@ Messages.app automation only when the client explicitly calls the send tool.
 > Access. Sending requires a Mac signed into Messages plus permission for the
 > launching app to automate Messages.
 
-## What it can do
+## How it works
 
-- Read recent messages across all conversations or filter by contact or group
-  chat, page back through history, and restrict reads to a date range or to
-  unread messages
-- List every conversation (1:1, business, and group) with message and unread
-  counts, and wait for new messages to arrive
-- See per-message context: the service it used (iMessage/SMS/RCS), whether an
-  inbound message is unread, whether an outbound one was delivered, plus
-  tapbacks and threaded replies
-- Fuzzy-search message text across a time window, including all available
-  history, scoped to one contact or conversation
-- Find Contacts by approximate name and return send-ready phone numbers
-- List named group chats and use their chat IDs for reads or sends
-- Send iMessage, with SMS/RCS fallback for eligible phone recipients, and send
-  local files as iMessage attachments
-- Optionally require the human to approve a send through MCP elicitation before
-  anything leaves the machine
-- Schedule a message for later delivery while the server stays running
-- Check whether a recipient appears reachable through iMessage before sending
-- Find attachments by date, sender, and MIME type, and search inside text and
-  PDF attachments (OCR for images with the optional OCR extra)
-- Return small images inline, convert HEIC images to PNG, or return a local path
-  for larger and non-image files
-- Create a Contacts entry from the client
-- Diagnose Messages and Contacts database permissions from inside the MCP client
+```mermaid
+flowchart LR
+    A[MCP client] -->|stdio| B[mac-messages-mcp]
+    B --> C{Tool call}
+    C -->|read tools| D[(chat.db read-only)]
+    C -->|read tools| E[(AddressBook read-only)]
+    C -->|send tools| F[Messages.app]
+    F --> G[Recipient]
+    D --> H[Untrusted-output boundary]
+    E --> H
+    H --> A
+```
+
+Everything the client reads comes from the local SQLite databases, opened
+read-only. Everything that leaves the machine goes out through Messages.app,
+under an explicit send tool call. Message- and contact-derived text is fenced as
+untrusted data on the way back to the model.
+
+## Capabilities
+
+| Area | What Mac Messages MCP provides |
+|---|---|
+| Reading | Recent messages across all conversations or filtered by contact, group chat, date range, or unread state; paging with `limit`/`offset` and forward-cursor reads |
+| Conversations | Every conversation (1:1, business, and group) with kind, message and unread counts, last activity, and a blocking wait for new messages |
+| Search | Fuzzy message-body search across a time window or all history, scoped to a contact or conversation |
+| Context | Per-message service (iMessage/SMS/RCS), unread and delivery state, tapbacks, and threaded replies |
+| Contacts | Fuzzy contact lookup by approximate name, send-ready phone numbers, and contact creation |
+| Group chats | Named group chat discovery with stable chat IDs reused for reads and sends |
+| Sending | iMessage with SMS/RCS fallback, file attachments, optional human approval through MCP elicitation, and iMessage reachability checks |
+| Scheduling | Queue a message for later delivery while the server process stays alive |
+| Attachments | Metadata search, best-effort text/PDF content search, inline images (HEIC converted to PNG), and local paths for larger or non-image files |
+| Diagnostics | Messages and Contacts database permission checks from inside the MCP client |
+| Privacy | Read-only SQLite access, no message archive of its own, and a structural untrusted-output boundary |
 
 ## Quick start
 
@@ -349,7 +367,6 @@ pretending:
 - scheduled sends rely on the server process staying alive; nothing is
   persisted, so a scheduled message is lost if the client disconnects first
 
-
 ## Agent skill
 
 The repository ships an [agent skill](.claude/skills/mac-messages/SKILL.md)
@@ -404,6 +421,31 @@ Images up to 5 MB are returned inline by default. HEIC images are converted to
 PNG. Larger images, PDFs, video, and audio are returned as local filesystem
 paths so the MCP client can decide whether to open them. Stickers, link-preview
 payloads, and `.pluginPayloadAttachment` containers are filtered out.
+
+## Architecture
+
+Mac Messages MCP is a small Python package with one job per module:
+
+```text
+mac_messages_mcp/
+  server.py       FastMCP server: tools, prompts, resources, stdio transport
+  cli.py          mac-messages-cli terminal interface
+  messages.py     chat.db reads and AppleScript sends for Messages.app
+  content.py      Best-effort text/PDF attachment content search
+  phone.py        E.164 normalization against the Mac's configured region
+  scheduler.py    In-process scheduled-send queue
+  untrusted.py    Structural neutralization of Messages/Contacts-derived text
+scripts/
+  build_mcpb.py   Builds the Claude Desktop .mcpb extension
+  bump_version.py Keeps version metadata in sync across release files
+tests/            Pytest suite over temporary databases and mocked AppleScript
+main.py           Stdio entry point for MCP clients
+manifest.json     MCPB manifest for the Claude Desktop extension
+```
+
+Reads go straight to `chat.db` and the AddressBook database; sends go through
+AppleScript into Messages.app. Model-facing payloads pass through
+`untrusted.py` before they reach the client.
 
 ## Privacy and security
 
@@ -626,9 +668,15 @@ The included Dockerfile is for package and catalog validation. A Linux container
 cannot access macOS TCC permissions or automate Messages.app, so Docker is not a
 supported way to read or send messages on the host Mac.
 
-## License
+## Documentation
 
-[MIT](LICENSE) © Carter Lasalle
+| Document | Purpose |
+|---|---|
+| [Agent skill](.claude/skills/mac-messages/SKILL.md) | When and how an agent should call each tool |
+| [Contributing](CONTRIBUTING.md) | Development workflow, checks, and pull-request standards |
+| [Security](SECURITY.md) | Private vulnerability reporting and the trust model |
+| [Versioning](VERSIONING.md) | Release and version metadata process |
+| [Changelog](CHANGELOG.md) | User-facing changes by release |
 
 ## Contributing
 
@@ -636,5 +684,6 @@ Issues and focused pull requests are welcome. Do not include real message
 contents, contacts, phone numbers, database files, or attachments in bug reports
 or fixtures.
 
-[Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) ·
-[Security](SECURITY.md) · [PyPI](https://pypi.org/project/mac-messages-mcp/)
+## License
+
+[MIT](LICENSE) © Carter Lasalle
