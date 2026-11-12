@@ -43,7 +43,7 @@ def test_send_with_attachment_reports_the_file(mock_applescript, _temp, tmp_path
 
     result = send_message("+15551234567", "here you go", attachment_paths=[str(doc)])
 
-    assert "report.pdf sent" in result
+    assert "report.pdf submitted" in result
     script = mock_applescript.call_args[0][0]
     assert "POSIX file" in script
     assert str(doc.resolve()) in script
@@ -56,8 +56,8 @@ def test_attachment_only_send_needs_no_text(mock_applescript, tmp_path):
 
     result = send_message("+15551234567", "", attachment_paths=[str(doc)])
 
-    assert "Sent 1 attachment(s) via iMessage" in result
-    assert "notes.txt sent" in result
+    assert "Submitted 1 attachment(s) to Messages" in result
+    assert "notes.txt submitted" in result
 
 
 @patch("mac_messages_mcp.messages.run_applescript")
@@ -404,3 +404,46 @@ def test_prompts_reference_the_tools_they_need():
     assert "hours=12" in summarize_recent_messages(12)
     assert "Ada" in draft_reply("Ada")
     assert "tool_send_message" in draft_reply("Ada")
+
+
+@patch("mac_messages_mcp.messages.run_applescript", return_value="Error: unavailable")
+def test_attachment_only_failure_is_not_success(_script, tmp_path):
+    doc = tmp_path / "logs.zip"
+    doc.write_bytes(b"test fixture")
+    result = send_message("+15551234567", "", attachment_paths=[str(doc)])
+    assert result.startswith("Error: 1 of 1 attachment(s) failed")
+    assert "logs.zip failed" in result
+    assert "Sent " not in result
+
+
+@patch(
+    "mac_messages_mcp.messages.run_applescript", side_effect=["", "Error: unavailable"]
+)
+def test_partial_attachment_failure_warns_against_duplicate_retry(script, tmp_path):
+    paths = [tmp_path / "one.zip", tmp_path / "two.zip"]
+    for path in paths:
+        path.write_bytes(b"test fixture")
+    result = send_message("+15551234567", "", attachment_paths=list(map(str, paths)))
+    assert result.startswith("Error: 1 of 2 attachment(s) failed")
+    assert "one.zip submitted (delivery not verified)" in result
+    assert "two.zip failed" in result
+    assert "do not resend successful files" in result
+    assert script.call_count == 2
+
+
+def test_attachment_confirmation_lists_files_and_requires_explicit_approval():
+    ctx = _FakeContext(_approval("accept"))
+    with patch("mac_messages_mcp.server.send_message") as send:
+        result = asyncio.run(
+            tool_send_message(
+                recipient="+15551234567",
+                message="logs",
+                confirm=True,
+                attachment_paths=["/tmp/logs.zip", "/tmp/other.txt"],
+                ctx=ctx,
+            )
+        )
+    assert "/tmp/logs.zip" in ctx.elicited
+    assert "/tmp/other.txt" in ctx.elicited
+    assert "cancelled" in result.lower()
+    send.assert_not_called()

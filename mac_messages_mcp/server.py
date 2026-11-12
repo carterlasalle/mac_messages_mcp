@@ -289,7 +289,8 @@ async def tool_send_message(
             approval = await ctx.elicit(
                 message=(
                     f"{'Group' if group_chat else 'Direct'} send to {recipient}:\n\n"
-                    f"{message}"
+                    f"{message}\n\nAttachments (local to the Mac):\n"
+                    + ("\n".join(attachment_paths) if attachment_paths else "None")
                 ),
                 schema=_SendConfirmation,
             )
@@ -301,9 +302,7 @@ async def tool_send_message(
             )
         action = getattr(approval, "action", None)
         data = getattr(approval, "data", None)
-        if action != "accept" or (
-            data is not None and getattr(data, "approve", None) is False
-        ):
+        if action != "accept" or getattr(data, "approve", None) is not True:
             return f"Send cancelled: the user did not approve it ({action})."
 
     try:

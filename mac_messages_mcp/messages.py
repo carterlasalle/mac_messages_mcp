@@ -1310,20 +1310,29 @@ def _send_message_to_recipient(
         )
 
     attachment_notes: list[str] = []
+    attachment_failures = 0
     for path in attachment_paths:
         result = _send_attachment_file(recipient, path)
         label = neutralize_untrusted_text(Path(path).name)
         if result.startswith("Error:"):
+            attachment_failures += 1
             attachment_notes.append(f"{label} failed ({result[6:].strip()})")
         else:
-            attachment_notes.append(f"{label} sent")
+            attachment_notes.append(f"{label} submitted (delivery not verified)")
 
     if not message.strip():
         target = neutralize_untrusted_text(contact_name or recipient)
         if not attachment_notes:
             return "Error: provide message text or at least one attachment."
+        if attachment_failures:
+            return (
+                f"Error: {attachment_failures} of {len(attachment_notes)} "
+                f"attachment(s) failed for {target}: "
+                + "; ".join(attachment_notes)
+                + ". Check Messages before retrying; do not resend successful files."
+            )
         return (
-            f"Sent {len(attachment_notes)} attachment(s) via iMessage to "
+            f"Submitted {len(attachment_notes)} attachment(s) to Messages for "
             f"{target}: " + "; ".join(attachment_notes)
         )
 
