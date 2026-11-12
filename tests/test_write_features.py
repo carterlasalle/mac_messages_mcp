@@ -7,8 +7,11 @@ send confirmation. AppleScript is always mocked; nothing is sent.
 
 import asyncio
 import re
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+
+import pytest
 
 from mac_messages_mcp.messages import create_contact, send_message
 from mac_messages_mcp.server import (
@@ -25,6 +28,14 @@ from mac_messages_mcp.server import (
     tool_wait_for_new_messages,
     triage_unread_messages,
 )
+
+
+@pytest.fixture(autouse=True)
+def isolated_messages_home(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    (home / "Library" / "Messages").mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", lambda: home)
+
 
 # ---------------------------------------------------------------------------
 # Attachments
@@ -46,7 +57,12 @@ def test_send_with_attachment_reports_the_file(mock_applescript, _temp, tmp_path
     assert "report.pdf submitted" in result
     script = mock_applescript.call_args[0][0]
     assert "POSIX file" in script
-    assert str(doc.resolve()) in script
+    assert str(doc.resolve()) not in script
+    copies = list((Path.home() / "Library" / "Messages").glob("mcp-send-*/report.pdf"))
+    assert len(copies) == 1
+    assert copies[0].read_bytes() == doc.read_bytes()
+    assert str(copies[0]) in script
+    assert copies[0].stat().st_mode & 0o777 == 0o600
 
 
 @patch("mac_messages_mcp.messages.run_applescript", return_value="")
@@ -447,3 +463,18 @@ def test_attachment_confirmation_lists_files_and_requires_explicit_approval():
     assert "/tmp/other.txt" in ctx.elicited
     assert "cancelled" in result.lower()
     send.assert_not_called()
+
+
+def test_staging_failure_never_sends(tmp_path):
+    doc = tmp_path / "test.txt"
+    doc.write_text("test")
+    with (
+        patch(
+            "mac_messages_mcp.messages.tempfile.mkdtemp",
+            side_effect=OSError("no access"),
+        ),
+        patch("mac_messages_mcp.messages.run_applescript") as script,
+    ):
+        result = send_message("+15551234567", "", attachment_paths=[str(doc)])
+    assert "could not stage attachment" in result
+    script.assert_not_called()

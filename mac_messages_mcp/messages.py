@@ -7,6 +7,7 @@ import logging
 import operator
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import tempfile
@@ -1272,7 +1273,23 @@ def _send_attachment_file(recipient: str, file_path: str) -> str:
     unreachable iMessage recipient fails rather than silently dropping the file.
     """
     safe_recipient = escape_applescript(recipient)
-    safe_path = escape_applescript(file_path)
+    # Messages' sandbox cannot ingest arbitrary source paths. Stage a private
+    # copy inside its existing data directory. Keep the copy: AppleScript
+    # returning does not mean asynchronous ingestion has finished.
+    try:
+        staging = Path(
+            tempfile.mkdtemp(
+                prefix="mcp-send-",
+                dir=Path.home() / "Library" / "Messages",
+            )
+        )
+        staged_file = staging / Path(file_path).name
+        with open(file_path, "rb") as source, staged_file.open("xb") as target:
+            os.chmod(staged_file, 0o600)
+            shutil.copyfileobj(source, target)
+    except OSError as exc:
+        return f"Error: could not stage attachment for Messages: {exc}"
+    safe_path = escape_applescript(str(staged_file))
     command = (
         'tell application "Messages" to send (POSIX file '
         f'"{safe_path}") to participant "{safe_recipient}" of '

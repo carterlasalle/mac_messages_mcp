@@ -701,3 +701,12 @@ Attachments support individual iMessage recipients only. They have no SMS/RCS
 fallback. A successful AppleScript call means the file was submitted to Messages,
 not that delivery or reading was verified. If some files fail, inspect Messages
 and retry only the files that have not been sent, to avoid duplicates.
+
+### Local attachment staging
+
+On recent macOS versions, Messages cannot ingest arbitrary source paths through
+AppleScript. The server copies each approved attachment into a unique private
+`mcp-send-*` directory under `~/Library/Messages/` before submitting it. Copies
+are retained because submission returns before asynchronous ingestion finishes.
+This uses Messages' existing data access and does not change macOS permissions.
+A submitted attachment is not proof of delivery; check Messages before retrying.
